@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.4
+// @version      1.2.0
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -393,32 +393,40 @@
     if (status) status.textContent = text;
   }
 
+  function updateCountBar() {
+    const el = document.querySelector("#nja-count-bar");
+    if (!el) return;
+    const f = state.filters;
+    el.innerHTML = `<b>${state.filtered.length}</b> / ${state.books.length} total | ${f.source} | ${f.category} | ${f.language}`;
+  }
+
   function renderBook() {
     const book = currentBook();
     const body = document.querySelector("#nilam-json-assistant-body");
     if (!body) return;
+    updateCountBar();
 
     if (!book) {
       body.innerHTML = `<div class="nja-empty">Tiada buku untuk filter ini.</div>`;
-      setStatus(`${state.filtered.length}/${state.books.length}`);
+      setStatus(`0/${state.books.length}`);
       return;
     }
 
     body.innerHTML = `
       <div class="nja-title">${escapeHtml(book.title)}</div>
-      <div class="nja-meta">${escapeHtml(book.author)} - ${escapeHtml(book.publisher)} - ${book.year}</div>
+      <div class="nja-meta">${escapeHtml(book.author)} · ${escapeHtml(book.publisher)} · ${book.year}</div>
       <div class="nja-grid">
-        <button data-copy="title">Title</button>
-        <button data-copy="author">Author</button>
-        <button data-copy="publisher">Publisher</button>
-        <button data-copy="isbn">ISBN</button>
-        <button data-copy="rumusan">Rumusan</button>
-        <button data-copy="lesson">Lesson</button>
+        <button class="nja-copy-btn" data-copy="title">Title</button>
+        <button class="nja-copy-btn" data-copy="author">Author</button>
+        <button class="nja-copy-btn" data-copy="publisher">Publisher</button>
+        <button class="nja-copy-btn" data-copy="isbn">ISBN</button>
+        <button class="nja-copy-btn" data-copy="rumusan">Rumusan</button>
+        <button class="nja-copy-btn" data-copy="lesson">Lesson</button>
       </div>
       <textarea readonly>${escapeHtml(JSON.stringify(book, null, 2))}</textarea>
     `;
 
-    setStatus(`${state.index + 1}/${state.filtered.length} - ${book.category} - ${book.language}`);
+    setStatus(`#${state.index + 1}/${state.filtered.length}`);
     saveState();
   }
 
@@ -435,6 +443,26 @@
     setStatus("Copied");
   }
 
+  async function reloadJson() {
+    setStatus("Reloading...");
+    try {
+      state.books = await loadJson(DATA_URL);
+      applyFilters();
+      renderBook();
+      setStatus("Loaded " + state.books.length + " books");
+    } catch (e) {
+      setStatus("Error: " + e.message);
+    }
+  }
+
+  function resetProgress() {
+    state.index = 0;
+    resetFillFlags();
+    saveState();
+    renderBook();
+    setStatus("Progress reset");
+  }
+
   function createPanel() {
     const panel = document.createElement("section");
     panel.id = "nilam-json-assistant";
@@ -442,75 +470,150 @@
       <style>
         #nilam-json-assistant {
           position: fixed;
-          right: 16px;
-          bottom: 16px;
+          right: 12px;
+          bottom: 12px;
           z-index: 999999;
-          width: 330px;
-          max-width: calc(100vw - 32px);
-          padding: 12px;
-          border: 1px solid #b8b8b8;
-          border-radius: 8px;
-          background: #f7f7f7;
-          color: #222;
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-          font: 14px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        }
-        #nilam-json-assistant h2 {
-          margin: 0 0 8px;
-          font-size: 16px;
-          color: #4b35c8;
-        }
-        #nilam-json-assistant select,
-        #nilam-json-assistant button {
-          min-height: 32px;
-          border: 1px solid #aaa;
-          border-radius: 6px;
+          width: 270px;
+          max-width: calc(100vw - 24px);
+          padding: 14px;
+          border: 2px solid #6846f5;
+          border-radius: 14px;
           background: #fff;
           color: #222;
+          box-shadow: 0 8px 32px rgba(104, 70, 245, 0.25), 0 2px 8px rgba(0,0,0,0.1);
+          font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }
-        #nilam-json-assistant button {
+        #nilam-json-assistant h2 {
+          margin: 0 0 10px;
+          font-size: 15px;
+          color: #6846f5;
+          font-weight: 700;
+        }
+        #nilam-json-assistant select {
+          min-height: 30px;
+          border: 1px solid #d0c8f5;
+          border-radius: 8px;
+          background: #f8f6ff;
+          color: #333;
+          padding: 0 4px;
+          font-size: 12px;
+        }
+        .nja-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          min-height: 36px;
+          border: none;
+          border-radius: 10px;
+          color: #fff;
+          font-weight: 600;
+          font-size: 12px;
+          cursor: pointer;
+          transition: opacity 0.15s, transform 0.1s;
+        }
+        .nja-btn:hover { opacity: 0.85; }
+        .nja-btn:active { transform: scale(0.96); }
+        .nja-btn-purple { background: #6846f5; }
+        .nja-btn-green { background: #22c55e; }
+        .nja-btn-blue { background: #3b82f6; }
+        .nja-btn-amber { background: #f59e0b; }
+        .nja-btn-red { background: #ef4444; }
+        .nja-btn-gray { background: #6b7280; }
+        .nja-copy-btn {
+          min-height: 28px;
+          border: 1px solid #d0c8f5;
+          border-radius: 8px;
+          background: #f8f6ff;
+          color: #6846f5;
+          font-size: 11px;
+          font-weight: 600;
           cursor: pointer;
         }
-        .nja-row,
-        .nja-grid {
-          display: grid;
-          gap: 8px;
-        }
+        .nja-copy-btn:hover { background: #ede9fe; }
         .nja-row {
+          display: grid;
           grid-template-columns: 1fr 1fr 1fr;
+          gap: 6px;
           margin-bottom: 8px;
         }
         .nja-grid {
+          display: grid;
           grid-template-columns: 1fr 1fr;
-          margin: 10px 0;
+          gap: 6px;
+          margin: 8px 0;
         }
         .nja-actions {
           display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 6px;
+          margin-bottom: 6px;
+        }
+        .nja-actions-3 {
+          display: grid;
           grid-template-columns: 1fr 1fr 1fr;
-          gap: 8px;
+          gap: 6px;
+          margin-bottom: 6px;
+        }
+        #nja-count-bar {
+          background: #f0edff;
+          border-radius: 8px;
+          padding: 5px 8px;
+          font-size: 11px;
+          color: #4c3fb0;
           margin-bottom: 8px;
+          text-align: center;
         }
         .nja-title {
           font-weight: 700;
-          margin-bottom: 3px;
+          font-size: 13px;
+          margin-bottom: 2px;
+          color: #1a1a2e;
         }
-        .nja-meta,
+        .nja-meta {
+          color: #666;
+          font-size: 11px;
+          margin-bottom: 4px;
+        }
         #nilam-json-assistant-status {
-          color: #555;
+          color: #6846f5;
           font-size: 12px;
+          font-weight: 600;
+          margin-bottom: 4px;
         }
         #nilam-json-assistant textarea {
           width: 100%;
-          height: 150px;
+          height: 120px;
           resize: vertical;
           box-sizing: border-box;
-          border: 1px solid #aaa;
-          border-radius: 6px;
-          padding: 8px;
-          font: 12px/1.35 Consolas, monospace;
+          border: 1px solid #d0c8f5;
+          border-radius: 8px;
+          padding: 6px;
+          font: 11px/1.3 Consolas, monospace;
+          background: #fafafa;
+        }
+        .nja-date-row {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 8px;
+        }
+        .nja-date-row span {
+          font-size: 11px;
+          color: #888;
+          white-space: nowrap;
+        }
+        .nja-date-row input {
+          flex: 1;
+          padding: 3px 6px;
+          box-sizing: border-box;
+          border: 1px solid #d0c8f5;
+          border-radius: 8px;
+          font-size: 12px;
         }
       </style>
       <h2>NILAM JSON Assistant</h2>
+      <div id="nja-count-bar">Loading...</div>
       <div class="nja-row">
         <select id="nja-source">
           <option value="synthetic">synthetic</option>
@@ -529,19 +632,23 @@
           <option value="all">all</option>
         </select>
       </div>
-      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-        <span style="font-size: 12px; color: #555; white-space: nowrap;">Start Date:</span>
-        <input type="date" id="nja-start-date" style="flex: 1; padding: 2px 6px; box-sizing: border-box;" />
+      <div class="nja-date-row">
+        <span>Start:</span>
+        <input type="date" id="nja-start-date" />
       </div>
       <div class="nja-actions">
-        <button id="nja-prev" type="button">Prev</button>
-        <button id="nja-fill" type="button">Fill</button>
-        <button id="nja-next" type="button">Next</button>
+        <button id="nja-fill" type="button" class="nja-btn nja-btn-purple">Fill</button>
+        <button id="nja-random" type="button" class="nja-btn nja-btn-blue">Random</button>
       </div>
-      <div class="nja-actions">
-        <button id="nja-random" type="button">Random</button>
-        <button id="nja-star" type="button">5 Star</button>
-        <button id="nja-scroll" type="button">Bottom</button>
+      <div class="nja-actions-3">
+        <button id="nja-prev" type="button" class="nja-btn nja-btn-gray">Prev</button>
+        <button id="nja-next" type="button" class="nja-btn nja-btn-green">Next</button>
+        <button id="nja-star" type="button" class="nja-btn nja-btn-amber">5 Star</button>
+      </div>
+      <div class="nja-actions-3">
+        <button id="nja-scroll" type="button" class="nja-btn nja-btn-gray">Bottom</button>
+        <button id="nja-reload" type="button" class="nja-btn nja-btn-blue">Reload</button>
+        <button id="nja-reset" type="button" class="nja-btn nja-btn-red">Reset</button>
       </div>
       <div id="nilam-json-assistant-status">Loading...</div>
       <div id="nilam-json-assistant-body"></div>
@@ -587,6 +694,8 @@
       if (button.id === "nja-fill") fillVisibleForm();
       if (button.id === "nja-star") forceClickFifthStar();
       if (button.id === "nja-scroll") scrollToBottomHard();
+      if (button.id === "nja-reload") { await reloadJson(); return; }
+      if (button.id === "nja-reset") { resetProgress(); return; }
 
       const copyField = button.dataset.copy;
       if (copyField) {
