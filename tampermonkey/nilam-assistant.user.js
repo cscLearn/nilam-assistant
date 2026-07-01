@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.0
-// @description  Pick NILAM book records from a GitHub JSON database.
+// @version      1.1.0
+// @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
+// @run-at       document-idle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -30,6 +31,10 @@
     },
     ...GM_getValue(STORE_KEY, {})
   };
+
+  let filledPage1 = false;
+  let filledPage2 = false;
+  let lastScrolledKey = "";
 
   function todayKey() {
     const d = new Date();
@@ -79,6 +84,200 @@
     return state.filtered[state.index] || null;
   }
 
+  function todayIsoDate() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function nilamLanguage(language) {
+    if (language === "bm") return "Bahasa Melayu";
+    if (language === "en") return "English";
+    return "Lain-lain";
+  }
+
+  function bookForForm(book) {
+    if (!book) return null;
+    return {
+      date: todayIsoDate(),
+      title: book.title,
+      pages: book.pages,
+      isbn: book.isbn,
+      author: book.author,
+      publisher: book.publisher,
+      year: book.year,
+      category: book.category,
+      language: nilamLanguage(book.language),
+      rumusan: book.rumusan,
+      lesson: book.lesson
+    };
+  }
+
+  function setValue(el, value) {
+    if (!el) return false;
+    el.focus();
+
+    const setter =
+      Object.getOwnPropertyDescriptor(el.constructor.prototype, "value")?.set ||
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set ||
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+
+    if (setter) setter.call(el, String(value ?? ""));
+    else el.value = String(value ?? "");
+
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: String(value ?? "") }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("blur", { bubbles: true }));
+    el.blur();
+    return true;
+  }
+
+  function fillDate(book) {
+    const directDate = document.querySelector('input[type="date"]');
+    const fallbackDate = document.querySelectorAll("input")[10];
+    const dateInput = directDate || fallbackDate;
+    if (!dateInput) return false;
+
+    dateInput.focus();
+    dateInput.click();
+    setValue(dateInput, book.date);
+
+    ["keydown", "keypress", "keyup"].forEach((type) => {
+      dateInput.dispatchEvent(new KeyboardEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        key: "Enter",
+        code: "Enter"
+      }));
+    });
+
+    return true;
+  }
+
+  function selectDropdownByText(selectIndex, targetText) {
+    const selectEl = document.querySelectorAll("select")[selectIndex];
+    if (!selectEl || !targetText) return false;
+
+    const opt = Array.from(selectEl.options).find((option) =>
+      option.textContent.trim().includes(targetText)
+    );
+
+    if (!opt) return false;
+
+    selectEl.value = opt.value;
+    selectEl.selectedIndex = opt.index;
+    selectEl.dispatchEvent(new Event("input", { bubbles: true }));
+    selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  function forceClickFifthStar() {
+    const stars = Array.from(document.querySelectorAll("svg"))
+      .filter((svg) => svg.outerHTML.includes("fa-star"));
+
+    if (stars.length < 5) return false;
+
+    ["mousedown", "mouseup", "click"].forEach((type) => {
+      stars[4].dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window
+      }));
+    });
+    return true;
+  }
+
+  function clickButtonByText(text) {
+    const btn = Array.from(document.querySelectorAll("button, span, div, p"))
+      .find((el) => (el.textContent || "").trim().includes(text));
+
+    if (!btn) return false;
+    btn.scrollIntoView({ behavior: "auto", block: "center" });
+    setTimeout(() => btn.click(), 150);
+    return true;
+  }
+
+  function fastScrollToBottomOnce(key) {
+    if (lastScrolledKey === key) return;
+    lastScrolledKey = key;
+
+    setTimeout(() => {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" });
+
+      const btn = Array.from(document.querySelectorAll("button, span, div, p"))
+        .find((el) => {
+          const t = (el.textContent || "").trim();
+          return t.includes("Hantar") || t.includes("Simpan") || t.includes("Seterusnya");
+        });
+
+      if (btn) btn.scrollIntoView({ behavior: "auto", block: "end" });
+    }, 150);
+  }
+
+  function fillPage1(book) {
+    if (filledPage1) return false;
+    filledPage1 = true;
+
+    fillDate(book);
+    setValue(document.getElementById("title"), book.title);
+    setValue(document.getElementById("noOfPage"), book.pages);
+    setValue(document.getElementById("isbn"), book.isbn);
+    setValue(document.getElementById("author"), book.author);
+    setValue(document.getElementById("publisher"), book.publisher);
+    setValue(document.getElementById("publishedYear"), book.year);
+
+    document.getElementById("typephysical")?.click();
+    selectDropdownByText(0, book.category);
+    selectDropdownByText(1, book.language);
+
+    setStatus("Page 1 filled");
+    setTimeout(() => clickButtonByText("Seterusnya"), 700);
+    return true;
+  }
+
+  function fillPage2(book) {
+    if (filledPage2) return false;
+    filledPage2 = true;
+
+    setValue(document.getElementById("summary"), book.rumusan);
+    setValue(document.getElementById("review"), book.lesson);
+
+    setTimeout(() => {
+      forceClickFifthStar();
+      fastScrollToBottomOnce(`page2-${state.index}`);
+    }, 300);
+
+    setStatus("Page 2 filled");
+    return true;
+  }
+
+  function fillVisibleForm() {
+    const btnPasti = Array.from(document.querySelectorAll("button, span, div"))
+      .find((el) => (el.textContent || "").trim() === "Pasti");
+
+    if (btnPasti) {
+      btnPasti.click();
+      if (state.filtered.length) {
+        state.index = Math.min(state.index + 1, state.filtered.length - 1);
+        resetFillFlags();
+        renderBook();
+      }
+      return true;
+    }
+
+    const book = bookForForm(currentBook());
+    if (!book) return false;
+
+    if (document.getElementById("title")) return fillPage1(book);
+    if (document.getElementById("summary")) return fillPage2(book);
+    return false;
+  }
+
+  function resetFillFlags() {
+    filledPage1 = false;
+    filledPage2 = false;
+    lastScrolledKey = "";
+  }
+
   function setStatus(text) {
     const status = document.querySelector("#nilam-json-assistant-status");
     if (status) status.textContent = text;
@@ -97,7 +296,7 @@
 
     body.innerHTML = `
       <div class="nja-title">${escapeHtml(book.title)}</div>
-      <div class="nja-meta">${escapeHtml(book.author)} · ${escapeHtml(book.publisher)} · ${book.year}</div>
+      <div class="nja-meta">${escapeHtml(book.author)} - ${escapeHtml(book.publisher)} - ${book.year}</div>
       <div class="nja-grid">
         <button data-copy="title">Title</button>
         <button data-copy="author">Author</button>
@@ -109,7 +308,7 @@
       <textarea readonly>${escapeHtml(JSON.stringify(book, null, 2))}</textarea>
     `;
 
-    setStatus(`${state.index + 1}/${state.filtered.length} · ${book.category} · ${book.language}`);
+    setStatus(`${state.index + 1}/${state.filtered.length} - ${book.category} - ${book.language}`);
     saveState();
   }
 
@@ -222,8 +421,13 @@
       </div>
       <div class="nja-actions">
         <button id="nja-prev" type="button">Prev</button>
-        <button id="nja-random" type="button">Random</button>
+        <button id="nja-fill" type="button">Fill</button>
         <button id="nja-next" type="button">Next</button>
+      </div>
+      <div class="nja-actions">
+        <button id="nja-random" type="button">Random</button>
+        <button id="nja-star" type="button">5 Star</button>
+        <button id="nja-scroll" type="button">Bottom</button>
       </div>
       <div id="nilam-json-assistant-status">Loading...</div>
       <div id="nilam-json-assistant-body"></div>
@@ -240,6 +444,7 @@
       if (event.target.id === "nja-category") state.filters.category = event.target.value;
       if (event.target.id === "nja-language") state.filters.language = event.target.value;
       state.index = 0;
+      resetFillFlags();
       applyFilters();
       renderBook();
     });
@@ -248,9 +453,21 @@
       const button = event.target.closest("button");
       if (!button) return;
 
-      if (button.id === "nja-prev" && state.filtered.length) state.index = (state.index - 1 + state.filtered.length) % state.filtered.length;
-      if (button.id === "nja-next" && state.filtered.length) state.index = (state.index + 1) % state.filtered.length;
-      if (button.id === "nja-random" && state.filtered.length) state.index = Math.floor(Math.random() * state.filtered.length);
+      if (button.id === "nja-prev" && state.filtered.length) {
+        state.index = (state.index - 1 + state.filtered.length) % state.filtered.length;
+        resetFillFlags();
+      }
+      if (button.id === "nja-next" && state.filtered.length) {
+        state.index = (state.index + 1) % state.filtered.length;
+        resetFillFlags();
+      }
+      if (button.id === "nja-random" && state.filtered.length) {
+        state.index = Math.floor(Math.random() * state.filtered.length);
+        resetFillFlags();
+      }
+      if (button.id === "nja-fill") fillVisibleForm();
+      if (button.id === "nja-star") forceClickFifthStar();
+      if (button.id === "nja-scroll") window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" });
 
       const copyField = button.dataset.copy;
       if (copyField) {
@@ -277,6 +494,7 @@
     }
 
     renderBook();
+    setInterval(fillVisibleForm, 700);
   }
 
   main().catch((error) => {
