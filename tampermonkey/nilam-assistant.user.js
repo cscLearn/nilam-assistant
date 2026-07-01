@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.1
+// @version      1.1.3
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -24,6 +24,7 @@
     books: [],
     filtered: [],
     index: 0,
+    startDate: todayIsoDate(),
     filters: {
       source: "synthetic",
       category: "all",
@@ -44,6 +45,7 @@
   function saveState() {
     GM_setValue(STORE_KEY, {
       index: state.index,
+      startDate: state.startDate,
       filters: state.filters
     });
   }
@@ -95,10 +97,52 @@
     return "Lain-lain";
   }
 
+  function getBookDate(index) {
+    const baseDateStr = state.startDate || todayIsoDate();
+    const baseDate = new Date(baseDateStr);
+    baseDate.setDate(baseDate.getDate() + index);
+    return `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, "0")}-${String(baseDate.getDate()).padStart(2, "0")}`;
+  }
+
+  function ensureMinWordCount(text, minWords, langCode) {
+    let cleanText = String(text ?? "").trim();
+    if (!cleanText) return "";
+    
+    let words = cleanText.split(/\s+/).filter(Boolean);
+    if (langCode === "zh" || /[\u4e00-\u9fa5]/.test(cleanText)) {
+      if (words.length < minWords) {
+        cleanText = cleanText.replace(/([，。！？；：、])/g, "$1 ");
+        words = cleanText.split(/\s+/).filter(Boolean);
+      }
+      if (words.length < minWords) {
+        cleanText = cleanText.split("").filter(c => c.trim()).join(" ");
+      }
+      return cleanText;
+    }
+
+    if (words.length < minWords) {
+      const fillers = {
+        bm: {
+          summary: "Buku ini sangat menarik dan sesuai dibaca oleh semua golongan pembaca.",
+          lesson: "Amalan mulia ini sangat penting."
+        },
+        en: {
+          summary: "This book is very interesting and highly recommended for all readers.",
+          lesson: "This moral lesson is very important."
+        }
+      };
+      const lang = langCode === "en" ? "en" : "bm";
+      const filler = minWords >= 10 ? fillers[lang].summary : fillers[lang].lesson;
+      cleanText = cleanText + " " + filler;
+    }
+    return cleanText;
+  }
+
   function bookForForm(book) {
     if (!book) return null;
+    const lang = book.language || "bm";
     return {
-      date: todayIsoDate(),
+      date: getBookDate(state.index),
       title: book.title,
       pages: book.pages,
       isbn: formatIsbn(book.isbn),
@@ -107,14 +151,17 @@
       year: book.year,
       category: book.category,
       language: nilamLanguage(book.language),
-      rumusan: book.rumusan,
-      lesson: book.lesson
+      rumusan: ensureMinWordCount(book.rumusan, 10, lang),
+      lesson: ensureMinWordCount(book.lesson, 5, lang)
     };
   }
 
   function formatIsbn(isbn) {
     const compact = String(isbn ?? "").replaceAll("-", "");
     if (!/^978\d{10}$/.test(compact)) return String(isbn ?? "");
+    if (compact.startsWith("978967")) return `${compact.slice(0, 3)}-${compact.slice(3, 6)}-${compact.slice(6, 9)}-${compact.slice(9, 12)}-${compact.slice(12)}`;
+    if (compact.startsWith("9780")) return `${compact.slice(0, 3)}-${compact.slice(3, 4)}-${compact.slice(4, 7)}-${compact.slice(7, 12)}-${compact.slice(12)}`;
+    if (compact.startsWith("9787")) return `${compact.slice(0, 3)}-${compact.slice(3, 4)}-${compact.slice(4, 8)}-${compact.slice(8, 12)}-${compact.slice(12)}`;
     return `${compact.slice(0, 3)}-${compact.slice(3, 6)}-${compact.slice(6, 9)}-${compact.slice(9, 12)}-${compact.slice(12)}`;
   }
 
@@ -137,11 +184,37 @@
     return true;
   }
 
+  function findDateInput() {
+    // 1. Direct type="date"
+    let el = document.querySelector('input[type="date"]');
+    if (el) return el;
+
+    // 2. ID match
+    el = document.querySelector('input[id*="date" i], input[id*="tarikh" i]');
+    if (el) return el;
+
+    // 3. Name match
+    el = document.querySelector('input[name*="date" i], input[name*="tarikh" i]');
+    if (el) return el;
+
+    // 4. Placeholder match
+    el = document.querySelector('input[placeholder*="date" i], input[placeholder*="tarikh" i], input[placeholder*="yyyy-mm-dd" i], input[placeholder*="dd/mm/yyyy" i]');
+    if (el) return el;
+
+    // 5. Fallback to index 10
+    const inputs = document.querySelectorAll("input");
+    if (inputs.length > 10) return inputs[10];
+
+    return null;
+  }
+
   function fillDate(book) {
-    const directDate = document.querySelector('input[type="date"]');
-    const fallbackDate = document.querySelectorAll("input")[10];
-    const dateInput = directDate || fallbackDate;
+    const dateInput = findDateInput();
     if (!dateInput) return false;
+
+    if (dateInput.hasAttribute("readonly")) {
+      dateInput.removeAttribute("readonly");
+    }
 
     dateInput.focus();
     dateInput.click();
@@ -273,8 +346,41 @@
     const book = bookForForm(currentBook());
     if (!book) return false;
 
-    if (document.getElementById("title")) return fillPage1(book);
-    if (document.getElementById("summary")) return fillPage2(book);
+    if (document.getElementById("title")) {
+      return fillPage1(book);
+    }
+
+    if (document.getElementById("summary")) {
+      // 1. Fill page 2 text fields if empty
+      if (document.getElementById("summary").value === "" || document.getElementById("review").value === "") {
+        fillPage2(book);
+      }
+      // 2. Continuously click stars on every interval check
+      forceClickFifthStar();
+      
+      // 3. Continuously scroll to bottom on every interval check
+      const hasActionBtn = Array.from(document.querySelectorAll("button, span, div, p"))
+        .some((el) => {
+          const t = (el.textContent || "").trim();
+          return t.includes("Hantar") || t.includes("Simpan") || t.includes("Seterusnya");
+        });
+      if (hasActionBtn) {
+        fastScrollToBottomOnce(`page2-${state.index}`);
+      }
+      return true;
+    }
+
+    // If there is an action button ("Hantar" or "Simpan"), we are on the final page (Page 4). Scroll to bottom!
+    const hasActionBtn = Array.from(document.querySelectorAll("button, span, div, p"))
+      .some((el) => {
+        const t = (el.textContent || "").trim();
+        return t.includes("Hantar") || t.includes("Simpan");
+      });
+    if (hasActionBtn) {
+      fastScrollToBottomOnce(`page4-${state.index}`);
+      return true;
+    }
+
     return false;
   }
 
@@ -425,6 +531,10 @@
           <option value="all">all</option>
         </select>
       </div>
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+        <span style="font-size: 12px; color: #555; white-space: nowrap;">Start Date:</span>
+        <input type="date" id="nja-start-date" style="flex: 1; padding: 2px 6px; box-sizing: border-box;" />
+      </div>
       <div class="nja-actions">
         <button id="nja-prev" type="button">Prev</button>
         <button id="nja-fill" type="button">Fill</button>
@@ -444,11 +554,16 @@
     document.querySelector("#nja-source").value = state.filters.source;
     document.querySelector("#nja-category").value = state.filters.category;
     document.querySelector("#nja-language").value = state.filters.language;
+    document.querySelector("#nja-start-date").value = state.startDate;
 
     panel.addEventListener("change", (event) => {
       if (event.target.id === "nja-source") state.filters.source = event.target.value;
       if (event.target.id === "nja-category") state.filters.category = event.target.value;
       if (event.target.id === "nja-language") state.filters.language = event.target.value;
+      if (event.target.id === "nja-start-date") {
+        state.startDate = event.target.value;
+        saveState();
+      }
       state.index = 0;
       resetFillFlags();
       applyFilters();

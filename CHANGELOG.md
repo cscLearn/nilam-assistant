@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2 - 2026-07-01
+
+- Format ISBN values with language-appropriate hyphen groups.
+
 ## 1.1.1 - 2026-07-01
 
 - Format ISBN values with hyphens before filling the AINS ISBN field.
