@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1 - 2026-07-01
+
+- Format ISBN values with hyphens before filling the AINS ISBN field.
+
 ## 1.1.0 - 2026-07-01
 
 - Restore automatic AINS form filling from the older local script.

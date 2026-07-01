@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.0
+// @version      1.1.1
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -101,7 +101,7 @@
       date: todayIsoDate(),
       title: book.title,
       pages: book.pages,
-      isbn: book.isbn,
+      isbn: formatIsbn(book.isbn),
       author: book.author,
       publisher: book.publisher,
       year: book.year,
@@ -110,6 +110,12 @@
       rumusan: book.rumusan,
       lesson: book.lesson
     };
+  }
+
+  function formatIsbn(isbn) {
+    const compact = String(isbn ?? "").replaceAll("-", "");
+    if (!/^978\d{10}$/.test(compact)) return String(isbn ?? "");
+    return `${compact.slice(0, 3)}-${compact.slice(3, 6)}-${compact.slice(6, 9)}-${compact.slice(9, 12)}-${compact.slice(12)}`;
   }
 
   function setValue(el, value) {
