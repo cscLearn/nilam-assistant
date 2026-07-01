@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.2.1
+// @version      1.2.2
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -184,25 +184,37 @@
     return true;
   }
 
+  function isInsidePanel(el) {
+    return el && el.closest("#nilam-json-assistant");
+  }
+
   function findDateInput() {
-    // 1. Direct type="date"
-    let el = document.querySelector('input[type="date"]');
-    if (el) return el;
+    // 1. Direct type="date" (exclude panel's own date input)
+    const allDate = document.querySelectorAll('input[type="date"]');
+    for (const el of allDate) {
+      if (!isInsidePanel(el)) return el;
+    }
 
     // 2. ID match
-    el = document.querySelector('input[id*="date" i], input[id*="tarikh" i]');
-    if (el) return el;
+    const idMatch = document.querySelectorAll('input[id*="date" i], input[id*="tarikh" i]');
+    for (const el of idMatch) {
+      if (!isInsidePanel(el)) return el;
+    }
 
     // 3. Name match
-    el = document.querySelector('input[name*="date" i], input[name*="tarikh" i]');
-    if (el) return el;
+    const nameMatch = document.querySelectorAll('input[name*="date" i], input[name*="tarikh" i]');
+    for (const el of nameMatch) {
+      if (!isInsidePanel(el)) return el;
+    }
 
     // 4. Placeholder match
-    el = document.querySelector('input[placeholder*="date" i], input[placeholder*="tarikh" i], input[placeholder*="yyyy-mm-dd" i], input[placeholder*="dd/mm/yyyy" i]');
-    if (el) return el;
+    const phMatch = document.querySelectorAll('input[placeholder*="date" i], input[placeholder*="tarikh" i], input[placeholder*="yyyy-mm-dd" i], input[placeholder*="dd/mm/yyyy" i]');
+    for (const el of phMatch) {
+      if (!isInsidePanel(el)) return el;
+    }
 
-    // 5. Fallback to index 10
-    const inputs = document.querySelectorAll("input");
+    // 5. Fallback to index 10 (skip panel inputs)
+    const inputs = Array.from(document.querySelectorAll("input")).filter(el => !isInsidePanel(el));
     if (inputs.length > 10) return inputs[10];
 
     return null;
@@ -233,7 +245,9 @@
   }
 
   function selectDropdownByText(selectIndex, targetText) {
-    const selectEl = document.querySelectorAll("select")[selectIndex];
+    // Only target selects OUTSIDE the panel
+    const allSelects = Array.from(document.querySelectorAll("select")).filter(el => !isInsidePanel(el));
+    const selectEl = allSelects[selectIndex];
     if (!selectEl || !targetText) return false;
 
     const opt = Array.from(selectEl.options).find((option) =>
@@ -679,13 +693,17 @@
     document.querySelector("#nja-start-date").value = state.startDate;
 
     panel.addEventListener("change", (event) => {
-      if (event.target.id === "nja-source") state.filters.source = event.target.value;
-      if (event.target.id === "nja-category") state.filters.category = event.target.value;
-      if (event.target.id === "nja-language") state.filters.language = event.target.value;
-      if (event.target.id === "nja-start-date") {
+      const id = event.target.id;
+      if (id === "nja-start-date") {
         state.startDate = event.target.value;
         saveState();
+        return; // Date change should NOT reset book index
       }
+      if (id === "nja-source") state.filters.source = event.target.value;
+      else if (id === "nja-category") state.filters.category = event.target.value;
+      else if (id === "nja-language") state.filters.language = event.target.value;
+      else return; // Ignore unknown change events
+      // Only reset index when a filter dropdown actually changed
       state.index = 0;
       resetFillFlags();
       applyFilters();
