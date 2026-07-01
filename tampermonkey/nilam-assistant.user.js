@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.2.2
+// @version      1.2.3
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -189,33 +189,21 @@
   }
 
   function findDateInput() {
-    // 1. Direct type="date" (exclude panel's own date input)
+    // 1. Proven V7 method: the 11th input on the AINS page (excluding panel inputs)
+    const inputs = Array.from(document.querySelectorAll("input")).filter(el => !isInsidePanel(el));
+    if (inputs.length > 10) return inputs[10];
+
+    // 2. Direct type="date" fallback
     const allDate = document.querySelectorAll('input[type="date"]');
     for (const el of allDate) {
       if (!isInsidePanel(el)) return el;
     }
 
-    // 2. ID match
+    // 3. ID match fallback
     const idMatch = document.querySelectorAll('input[id*="date" i], input[id*="tarikh" i]');
     for (const el of idMatch) {
       if (!isInsidePanel(el)) return el;
     }
-
-    // 3. Name match
-    const nameMatch = document.querySelectorAll('input[name*="date" i], input[name*="tarikh" i]');
-    for (const el of nameMatch) {
-      if (!isInsidePanel(el)) return el;
-    }
-
-    // 4. Placeholder match
-    const phMatch = document.querySelectorAll('input[placeholder*="date" i], input[placeholder*="tarikh" i], input[placeholder*="yyyy-mm-dd" i], input[placeholder*="dd/mm/yyyy" i]');
-    for (const el of phMatch) {
-      if (!isInsidePanel(el)) return el;
-    }
-
-    // 5. Fallback to index 10 (skip panel inputs)
-    const inputs = Array.from(document.querySelectorAll("input")).filter(el => !isInsidePanel(el));
-    if (inputs.length > 10) return inputs[10];
 
     return null;
   }
@@ -280,7 +268,30 @@
         }));
       });
 
-      console.log("⭐⭐⭐⭐⭐ 已精准点击第5颗星");
+      // Also click the closest parent elements in case click event is bound to wrapping elements
+      const parent = fifthStar.parentElement;
+      if (parent) {
+        ["mousedown", "mouseup", "click"].forEach(type => {
+          parent.dispatchEvent(new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          }));
+        });
+      }
+
+      const grandparent = parent ? parent.parentElement : null;
+      if (grandparent) {
+        ["mousedown", "mouseup", "click"].forEach(type => {
+          grandparent.dispatchEvent(new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window
+          }));
+        });
+      }
+
+      console.log("⭐⭐⭐⭐⭐ 已精准点击第5颗星及其父级容器");
       return true;
     }
 
@@ -400,13 +411,21 @@
     }
 
     // Page 3/4: detect action buttons and scroll to bottom once per page
-    const hasActionBtn = Array.from(document.querySelectorAll("button, span, div, p"))
-      .some((el) => {
-        const t = (el.textContent || "").trim();
-        return t.includes("Hantar") || t.includes("Simpan") || t.includes("Seterusnya");
-      });
-    if (hasActionBtn) {
-      scrollToBottomOnce(`page-action-${state.index}`);
+    const buttons = Array.from(document.querySelectorAll("button, span, div, p"));
+    const hasHantar = buttons.some((el) => {
+      const t = (el.textContent || "").trim();
+      return t === "Hantar" || t === "Simpan";
+    });
+    const hasSeterusnya = buttons.some((el) => {
+      const t = (el.textContent || "").trim();
+      return t === "Seterusnya";
+    });
+
+    if (hasHantar) {
+      scrollToBottomOnce(`hantar-${state.index}`);
+      return true;
+    } else if (hasSeterusnya) {
+      scrollToBottomOnce(`seterusnya-${state.index}`);
       return true;
     }
 
@@ -432,20 +451,23 @@
   }
 
   function renderBook() {
-    const book = currentBook();
+    const rawBook = currentBook();
     const body = document.querySelector("#nilam-json-assistant-body");
     if (!body) return;
     updateCountBar();
 
-    if (!book) {
+    if (!rawBook) {
       body.innerHTML = `<div class="nja-empty">Tiada buku untuk filter ini.</div>`;
       setStatus(`0/${state.books.length}`);
       return;
     }
 
+    const book = bookForForm(rawBook);
+
     body.innerHTML = `
       <div class="nja-title">${escapeHtml(book.title)}</div>
       <div class="nja-meta">${escapeHtml(book.author)} · ${escapeHtml(book.publisher)} · ${book.year}</div>
+      <div style="font-size: 11px; color: #6846f5; margin-bottom: 6px; font-weight: bold;">📅 Tarikh: ${book.date}</div>
       <div class="nja-grid">
         <button class="nja-copy-btn" data-copy="title">Title</button>
         <button class="nja-copy-btn" data-copy="author">Author</button>
@@ -697,6 +719,8 @@
       if (id === "nja-start-date") {
         state.startDate = event.target.value;
         saveState();
+        resetFillFlags();
+        renderBook();
         return; // Date change should NOT reset book index
       }
       if (id === "nja-source") state.filters.source = event.target.value;
