@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.2.0
+// @version      1.2.1
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -366,7 +366,24 @@
     if (!book) return false;
 
     if (document.getElementById("title")) return fillPage1(book);
-    if (document.getElementById("summary")) return fillPage2(book);
+
+    if (document.getElementById("summary")) {
+      // Fill text fields once
+      if (!filledPage2) {
+        filledPage2 = true;
+        setValue(document.getElementById("summary"), book.rumusan);
+        setValue(document.getElementById("review"), book.lesson);
+        setStatus("Page 2 filled");
+        // First attempt after a short delay
+        setTimeout(() => {
+          forceClickFifthStar();
+          scrollToBottomHard();
+        }, 500);
+      }
+      // Keep trying to click stars on every interval (in case SVG wasn't ready)
+      forceClickFifthStar();
+      return true;
+    }
 
     // Page 3/4: detect action buttons and scroll to bottom once per page
     const hasActionBtn = Array.from(document.querySelectorAll("button, span, div, p"))
