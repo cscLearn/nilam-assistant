@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.3
+// @version      1.1.4
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -251,18 +251,27 @@
 
   function forceClickFifthStar() {
     const stars = Array.from(document.querySelectorAll("svg"))
-      .filter((svg) => svg.outerHTML.includes("fa-star"));
+      .filter(svg => svg.outerHTML.includes("fa-star"));
 
-    if (stars.length < 5) return false;
+    console.log("找到星星:", stars.length);
 
-    ["mousedown", "mouseup", "click"].forEach((type) => {
-      stars[4].dispatchEvent(new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        view: window
-      }));
-    });
-    return true;
+    if (stars.length >= 5) {
+      const fifthStar = stars[4];
+
+      ["mousedown", "mouseup", "click"].forEach(type => {
+        fifthStar.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+      });
+
+      console.log("⭐⭐⭐⭐⭐ 已精准点击第5颗星");
+      return true;
+    }
+
+    console.log("❌ 找不到5颗星");
+    return false;
   }
 
   function clickButtonByText(text) {
@@ -275,21 +284,31 @@
     return true;
   }
 
-  function fastScrollToBottomOnce(key) {
+  function scrollToBottomHard() {
+    setTimeout(() => {
+      window.scrollTo({
+        top: document.documentElement.scrollHeight || document.body.scrollHeight,
+        behavior: "auto"
+      });
+
+      document.documentElement.scrollTop = document.documentElement.scrollHeight;
+      document.body.scrollTop = document.body.scrollHeight;
+
+      const scrollers = Array.from(document.querySelectorAll("div"))
+        .filter(el => el.scrollHeight > el.clientHeight + 100);
+
+      scrollers.forEach(el => {
+        el.scrollTop = el.scrollHeight;
+      });
+
+      console.log("✅ 已强制滚到底部");
+    }, 300);
+  }
+
+  function scrollToBottomOnce(key) {
     if (lastScrolledKey === key) return;
     lastScrolledKey = key;
-
-    setTimeout(() => {
-      window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" });
-
-      const btn = Array.from(document.querySelectorAll("button, span, div, p"))
-        .find((el) => {
-          const t = (el.textContent || "").trim();
-          return t.includes("Hantar") || t.includes("Simpan") || t.includes("Seterusnya");
-        });
-
-      if (btn) btn.scrollIntoView({ behavior: "auto", block: "end" });
-    }, 150);
+    scrollToBottomHard();
   }
 
   function fillPage1(book) {
@@ -322,8 +341,8 @@
 
     setTimeout(() => {
       forceClickFifthStar();
-      fastScrollToBottomOnce(`page2-${state.index}`);
-    }, 300);
+      scrollToBottomHard();
+    }, 500);
 
     setStatus("Page 2 filled");
     return true;
@@ -346,38 +365,17 @@
     const book = bookForForm(currentBook());
     if (!book) return false;
 
-    if (document.getElementById("title")) {
-      return fillPage1(book);
-    }
+    if (document.getElementById("title")) return fillPage1(book);
+    if (document.getElementById("summary")) return fillPage2(book);
 
-    if (document.getElementById("summary")) {
-      // 1. Fill page 2 text fields if empty
-      if (document.getElementById("summary").value === "" || document.getElementById("review").value === "") {
-        fillPage2(book);
-      }
-      // 2. Continuously click stars on every interval check
-      forceClickFifthStar();
-      
-      // 3. Continuously scroll to bottom on every interval check
-      const hasActionBtn = Array.from(document.querySelectorAll("button, span, div, p"))
-        .some((el) => {
-          const t = (el.textContent || "").trim();
-          return t.includes("Hantar") || t.includes("Simpan") || t.includes("Seterusnya");
-        });
-      if (hasActionBtn) {
-        fastScrollToBottomOnce(`page2-${state.index}`);
-      }
-      return true;
-    }
-
-    // If there is an action button ("Hantar" or "Simpan"), we are on the final page (Page 4). Scroll to bottom!
+    // Page 3/4: detect action buttons and scroll to bottom once per page
     const hasActionBtn = Array.from(document.querySelectorAll("button, span, div, p"))
       .some((el) => {
         const t = (el.textContent || "").trim();
-        return t.includes("Hantar") || t.includes("Simpan");
+        return t.includes("Hantar") || t.includes("Simpan") || t.includes("Seterusnya");
       });
     if (hasActionBtn) {
-      fastScrollToBottomOnce(`page4-${state.index}`);
+      scrollToBottomOnce(`page-action-${state.index}`);
       return true;
     }
 
@@ -588,7 +586,7 @@
       }
       if (button.id === "nja-fill") fillVisibleForm();
       if (button.id === "nja-star") forceClickFifthStar();
-      if (button.id === "nja-scroll") window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" });
+      if (button.id === "nja-scroll") scrollToBottomHard();
 
       const copyField = button.dataset.copy;
       if (copyField) {
