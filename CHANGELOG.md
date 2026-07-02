@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.6 - 2026-07-02
+
+- Re-save the userscript without UTF-8 BOM so Tampermonkey can read metadata cleanly.
+
 ## 2.0.5 - 2026-07-02
 
 - Restore the stable 1.2.x direct AINS autofill flow.

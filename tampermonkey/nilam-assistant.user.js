@@ -1,7 +1,7 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      2.0.5
+// @version      2.0.6
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
