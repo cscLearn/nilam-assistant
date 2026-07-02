@@ -1,0 +1,7 @@
+name = "nilam-progress-sync"
+main = "src/index.js"
+compatibility_date = "2026-07-02"
+
+kv_namespaces = [
+  { binding = "NILAM_PROGRESS", id = "nilam-progress-kv" }
+]
