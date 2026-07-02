@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      2.0.1
+// @version      2.0.2
 // @description  Auto-fill AINS NILAM book records deterministically synced with Cloudflare Worker.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -543,26 +543,50 @@
 
   let tokenIntercepted = "";
   let userMeId = null;
+  let lastRatingBtnClickTime = 0;
 
   // Intercept credentials and email
   function hookFetch() {
     const originalFetch = window.fetch;
-    window.fetch = async function (url, options) {
-      const urlStr = String(url);
-      if (options && options.headers) {
-        const auth = options.headers["authorization"] || options.headers["Authorization"];
-        if (auth && auth.startsWith("Bearer ")) {
-          tokenIntercepted = auth;
-          try {
-            const payload = JSON.parse(atob(auth.split(".")[1]));
-            userMeId = payload.id;
-          } catch (e) {
-            console.error("NILAM Assistant: Failed to parse JWT token", e);
+    window.fetch = async function (...args) {
+      const url = args[0];
+      const options = args[1] || {};
+
+      let urlStr = "";
+      let headers = {};
+
+      if (url instanceof Request) {
+        urlStr = url.url;
+        url.headers.forEach((value, key) => {
+          headers[key.toLowerCase()] = value;
+        });
+      } else {
+        urlStr = String(url);
+        if (options.headers) {
+          if (options.headers instanceof Headers) {
+            options.headers.forEach((value, key) => {
+              headers[key.toLowerCase()] = value;
+            });
+          } else {
+            Object.keys(options.headers).forEach(key => {
+              headers[key.toLowerCase()] = String(options.headers[key]);
+            });
           }
         }
       }
 
-      const response = await originalFetch.apply(this, arguments);
+      const auth = headers["authorization"];
+      if (auth && auth.startsWith("Bearer ")) {
+        tokenIntercepted = auth;
+        try {
+          const payload = JSON.parse(atob(auth.split(".")[1]));
+          userMeId = payload.id;
+        } catch (e) {
+          console.error("NILAM Assistant: Failed to parse JWT token", e);
+        }
+      }
+
+      const response = await originalFetch(...args);
 
       if (urlStr.includes("/api/users/me")) {
         const clone = response.clone();
@@ -996,6 +1020,22 @@
     return rect.width > 0 && rect.height > 0;
   }
 
+  function isElementVisible(el) {
+    if (!el) return false;
+    let cur = el;
+    while (cur && cur !== document.body) {
+      const style = window.getComputedStyle(cur);
+      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+        return false;
+      }
+      cur = cur.parentElement;
+    }
+    const rect = el.getBoundingClientRect();
+    const parentRect = el.parentElement ? el.parentElement.getBoundingClientRect() : null;
+    const hasDimensions = (rect.width > 0 && rect.height > 0) || (parentRect && parentRect.width > 0 && parentRect.height > 0);
+    return hasDimensions;
+  }
+
   function findDateInput() {
     // 1. Try Calibrated Selector first
     const calSelector = localStorage.getItem("nilam_date_selector");
@@ -1171,7 +1211,7 @@
 
     // 2. Traversal selector (User Reference script style, optimized)
     const stars = Array.from(document.querySelectorAll("svg"))
-      .filter(svg => !isInsidePanel(svg) && svg.outerHTML.includes("fa-star"));
+      .filter(svg => !isInsidePanel(svg) && svg.outerHTML.includes("fa-star") && isElementVisible(svg));
 
     if (stars.length >= 5) {
       const fifthStar = stars[4];
@@ -1207,7 +1247,7 @@
     }
 
     const genericStars = Array.from(document.querySelectorAll('svg, [class*="star" i], [data-icon*="star" i]'))
-      .filter((el) => !isInsidePanel(el) && isUsableElement(el) && /star|bintang/i.test(el.outerHTML || el.className || ""))
+      .filter((el) => !isInsidePanel(el) && isElementVisible(el) && /star|bintang/i.test(el.outerHTML || el.className || ""))
       .sort((a, b) => {
         const ar = a.getBoundingClientRect();
         const br = b.getBoundingClientRect();
@@ -1228,12 +1268,19 @@
     }
 
     // 4. AINS Rating button expander fallback: Click "Berikan penilaian anda" if stars not visible yet
-    const ratingBtn = Array.from(document.querySelectorAll("button, span, div, p, ion-button"))
+    const ratingBtn = Array.from(document.querySelectorAll("button, span, div, p, ion-button, ion-item, ion-card"))
       .filter(el => !isInsidePanel(el) && isUsableElement(el))
-      .find(el => (el.textContent || "").trim() === "Berikan penilaian anda");
+      .find(el => {
+        const text = (el.textContent || "").trim().toLowerCase();
+        return text === "berikan penilaian anda" || text.includes("berikan penilaian anda");
+      });
     if (ratingBtn) {
-      console.log("NILAM Assistant: Found rating expander, clicking...");
-      clickLikeUser(ratingBtn);
+      const now = Date.now();
+      if (now - lastRatingBtnClickTime > 2500) {
+        lastRatingBtnClickTime = now;
+        console.log("NILAM Assistant: Found rating expander, clicking...");
+        clickLikeUser(ratingBtn);
+      }
       setTimeout(forceClickFifthStar, 300);
       return true;
     }
