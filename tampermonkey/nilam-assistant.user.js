@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      2.0.0
+// @version      2.0.1
 // @description  Auto-fill AINS NILAM book records deterministically synced with Cloudflare Worker.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -1227,6 +1227,17 @@
       return true;
     }
 
+    // 4. AINS Rating button expander fallback: Click "Berikan penilaian anda" if stars not visible yet
+    const ratingBtn = Array.from(document.querySelectorAll("button, span, div, p, ion-button"))
+      .filter(el => !isInsidePanel(el) && isUsableElement(el))
+      .find(el => (el.textContent || "").trim() === "Berikan penilaian anda");
+    if (ratingBtn) {
+      console.log("NILAM Assistant: Found rating expander, clicking...");
+      clickLikeUser(ratingBtn);
+      setTimeout(forceClickFifthStar, 300);
+      return true;
+    }
+
     setStatus("5 Star not found");
     return false;
   }
@@ -1296,6 +1307,7 @@
     const book = await generateBook(currentLang, state.filters.category, currentLangIndex);
 
     if (document.getElementById("title")) {
+      filledPage2 = false; // Self-healing state reset
       if (filledPage1) return false;
       filledPage1 = true;
 
@@ -1317,6 +1329,7 @@
     }
 
     if (document.getElementById("summary")) {
+      filledPage1 = false; // Self-healing state reset
       if (!filledPage2) {
         filledPage2 = true;
         setValue(document.getElementById("summary"), book.rumusan);
@@ -1882,14 +1895,10 @@
     saveState();
     await fetchSessionState();
     
-    // Auto fill visible detection interval (runs every 900ms)
+    // Auto fill visible detection interval (runs every 800ms)
     setInterval(() => {
-      const hasSummary = document.getElementById("summary");
-      const hasTitle = document.getElementById("title");
-      if (hasSummary || hasTitle) {
-        // If on form pages, only trigger auto-fill if auto fill button clicked or we want it
-      }
-    }, 900);
+      fillVisibleForm();
+    }, 800);
   }
 
   window.addEventListener("load", () => {
