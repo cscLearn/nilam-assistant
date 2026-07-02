@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.5 - 2026-07-02
+
+- Restore the stable 1.2.x direct AINS autofill flow.
+- Remove the V2 fetch interception and Cloudflare sync path that made form filling brittle.
+- Keep only local used-book tracking and fixed-date filling.
+
 ## 1.3.0 - 2026-07-02
 
 - Use the selected panel date directly instead of adding the book index to it.
