@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.3.0
+// @version      1.4.0
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -240,6 +240,9 @@
   }
 
   function findDateInput() {
+    // Helper: element must be usable AND outside our panel
+    const isFormElement = (el) => isUsableElement(el) && !isInsidePanel(el);
+
     const directSelectors = [
       'input[type="date"]',
       'input[id*="date" i]',
@@ -253,23 +256,24 @@
     ];
 
     for (const selector of directSelectors) {
-      const found = Array.from(document.querySelectorAll(selector)).find(isUsableElement);
+      const found = Array.from(document.querySelectorAll(selector)).find(isFormElement);
       if (found) return found;
     }
 
     const labels = Array.from(document.querySelectorAll("label")).filter((label) =>
-      /tarikh|date/i.test(label.textContent || "")
+      !isInsidePanel(label) && /tarikh|date/i.test(label.textContent || "")
     );
     for (const label of labels) {
       const input = label.control || label.querySelector("input");
-      if (isUsableElement(input)) return input;
+      if (isFormElement(input)) return input;
     }
 
-    const visibleInputs = Array.from(document.querySelectorAll("input")).filter(isUsableElement);
+    const visibleInputs = Array.from(document.querySelectorAll("input")).filter(isFormElement);
     const titleIndex = visibleInputs.indexOf(document.getElementById("title"));
     if (titleIndex > 0) return visibleInputs[titleIndex - 1];
 
-    const blockedIds = new Set(["title", "noOfPage", "isbn", "author", "publisher", "publishedYear"]);
+    const blockedIds = new Set(["title", "noOfPage", "isbn", "author", "publisher", "publishedYear",
+      "nja-start-date", "nja-source", "nja-category", "nja-language"]);
     return visibleInputs
       .find((el) => {
         const type = String(el.type || "").toLowerCase();
@@ -289,15 +293,37 @@
 
   function fillDate(book) {
     const dateInput = findDateInput();
-    if (!dateInput) return false;
+    if (!dateInput) {
+      console.log("NILAM Assistant: date input not found, retrying...");
+      return false;
+    }
 
     if (dateInput.hasAttribute("readonly")) {
       dateInput.removeAttribute("readonly");
     }
+    if (dateInput.hasAttribute("disabled")) {
+      dateInput.removeAttribute("disabled");
+    }
+
+    const dateValue = dateValueForInput(dateInput, book.date);
+
+    // Try native setter first (works best with React/Angular)
+    const nativeSetter =
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
 
     dateInput.focus();
     dateInput.click();
-    setValue(dateInput, dateValueForInput(dateInput, book.date));
+
+    if (nativeSetter) {
+      nativeSetter.call(dateInput, dateValue);
+    } else {
+      dateInput.value = dateValue;
+    }
+
+    // Fire all events that frameworks might listen to
+    dateInput.dispatchEvent(new Event("input", { bubbles: true }));
+    dateInput.dispatchEvent(new Event("change", { bubbles: true }));
+    dateInput.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: dateValue }));
 
     ["keydown", "keypress", "keyup"].forEach((type) => {
       dateInput.dispatchEvent(new KeyboardEvent(type, {
@@ -308,6 +334,20 @@
       }));
     });
 
+    dateInput.dispatchEvent(new Event("blur", { bubbles: true }));
+
+    // Verify and retry after a short delay
+    setTimeout(() => {
+      if (dateInput.value !== dateValue) {
+        console.log("NILAM Assistant: date retry", dateInput.value, "->", dateValue);
+        if (nativeSetter) nativeSetter.call(dateInput, dateValue);
+        else dateInput.value = dateValue;
+        dateInput.dispatchEvent(new Event("input", { bubbles: true }));
+        dateInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }, 200);
+
+    console.log("NILAM Assistant: date filled ->", dateValue);
     return true;
   }
 
@@ -367,38 +407,70 @@
   }
 
   function forceClickFifthStar() {
+    // Strategy 1: Find SVGs with fa-star in outerHTML (matches NILAM's actual DOM)
+    const stars = Array.from(document.querySelectorAll("svg"))
+      .filter(svg => !isInsidePanel(svg) && svg.outerHTML.includes("fa-star"));
+
+    console.log("NILAM Assistant: found fa-star SVGs:", stars.length);
+
+    if (stars.length >= 5) {
+      const fifthStar = stars[4];
+      fifthStar.scrollIntoView({ behavior: "auto", block: "center" });
+
+      ["mousedown", "mouseup", "click"].forEach(type => {
+        fifthStar.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+      });
+
+      // Also try clicking parent elements (some frameworks listen on wrapper)
+      let parent = fifthStar.parentElement;
+      for (let i = 0; parent && i < 3; i++, parent = parent.parentElement) {
+        if (parent.matches('button, label, [role="button"], span, div')) {
+          parent.click();
+          break;
+        }
+      }
+
+      console.log("⭐⭐⭐⭐⭐ Clicked 5th star");
+      setStatus("5 Star clicked");
+      return true;
+    }
+
+    // Strategy 2: Try radio input with value "5"
     const fiveValue = Array.from(document.querySelectorAll('input[type="radio"]'))
-      .filter(isUsableElement)
+      .filter(el => isUsableElement(el) && !isInsidePanel(el))
       .find((el) => /rating|star|rate|skor|bintang/i.test(`${el.name} ${el.id}`) && String(el.value) === "5");
     if (fiveValue && clickLikeUser(fiveValue)) {
       setStatus("5 Star clicked");
       return true;
     }
 
-    const directFive = Array.from(document.querySelectorAll('button, label, [role="radio"], [role="button"], [data-value], [aria-label], [title]'))
-      .filter(isUsableElement)
-      .find((el) => /(^|\D)5(\D|$)|five|lima/i.test(`${el.textContent || ""} ${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""} ${el.getAttribute("data-value") || ""}`));
-    if (directFive && clickLikeUser(directFive)) {
-      setStatus("5 Star clicked");
-      return true;
-    }
-
-    const stars = Array.from(document.querySelectorAll('svg, [class*="star" i], [data-icon*="star" i]'))
-      .filter((el) => isUsableElement(el) && /star|bintang|fa-star/i.test(el.outerHTML || el.className || ""))
-      .map(nearestClickable)
-      .filter((el, index, arr) => arr.indexOf(el) === index)
+    // Strategy 3: Generic star-like elements, sorted left-to-right
+    const genericStars = Array.from(document.querySelectorAll('svg, [class*="star" i], [data-icon*="star" i]'))
+      .filter((el) => !isInsidePanel(el) && isUsableElement(el) && /star|bintang/i.test(el.outerHTML || el.className || ""))
       .sort((a, b) => {
         const ar = a.getBoundingClientRect();
         const br = b.getBoundingClientRect();
         return Math.abs(ar.top - br.top) > 8 ? ar.top - br.top : ar.left - br.left;
       });
 
-    if (stars.length >= 5 && clickLikeUser(stars[4])) {
+    if (genericStars.length >= 5) {
+      const target = genericStars[4];
+      target.scrollIntoView({ behavior: "auto", block: "center" });
+      ["mousedown", "mouseup", "click"].forEach(type => {
+        target.dispatchEvent(new MouseEvent(type, {
+          bubbles: true, cancelable: true, view: window
+        }));
+      });
+      target.click?.();
       setStatus("5 Star clicked");
       return true;
     }
 
-    console.log("NILAM Assistant: five-star control not found", { radio: Boolean(fiveValue), stars: stars.length });
+    console.log("NILAM Assistant: five-star control not found", { svgStars: stars.length, radio: Boolean(fiveValue), generic: genericStars.length });
     setStatus("5 Star not found");
     return false;
   }
@@ -414,24 +486,44 @@
   }
 
   function scrollToBottomHard() {
-    setTimeout(() => {
+    const doScroll = () => {
+      // 1. Standard window scroll
       window.scrollTo({
         top: document.documentElement.scrollHeight || document.body.scrollHeight,
         behavior: "auto"
       });
-
       document.documentElement.scrollTop = document.documentElement.scrollHeight;
       document.body.scrollTop = document.body.scrollHeight;
 
-      const scrollers = Array.from(document.querySelectorAll("div"))
-        .filter(el => el.scrollHeight > el.clientHeight + 100);
+      // 2. Ionic / Angular scroll containers
+      const ionicContainers = document.querySelectorAll(
+        "ion-content, .ion-content-scroll-host, .scroll-content, [class*='content-scroll'], main, [role='main']"
+      );
+      ionicContainers.forEach(el => {
+        if (el.scrollToBottom) {
+          el.scrollToBottom(0);
+        } else {
+          el.scrollTop = el.scrollHeight;
+        }
+      });
 
+      // 3. Any generic overflow div
+      const scrollers = Array.from(document.querySelectorAll("div, section, article"))
+        .filter(el => {
+          if (isInsidePanel(el)) return false;
+          return el.scrollHeight > el.clientHeight + 50;
+        });
       scrollers.forEach(el => {
         el.scrollTop = el.scrollHeight;
       });
 
       console.log("✅ 已强制滚到底部");
-    }, 300);
+    };
+
+    // Fire at multiple timings to catch async renders
+    setTimeout(doScroll, 100);
+    setTimeout(doScroll, 400);
+    setTimeout(doScroll, 800);
   }
 
   function scrollToBottomOnce(key) {
