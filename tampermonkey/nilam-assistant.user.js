@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      2.0.3
+// @version      2.0.4
 // @description  Auto-fill AINS NILAM book records deterministically synced with Cloudflare Worker.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -1359,7 +1359,14 @@
 
     if (document.getElementById("title")) {
       filledPage2 = false; // Self-healing state reset
-      if (filledPage1) return false;
+      if (filledPage1) {
+        // Verify fill actually stuck — if Angular overwrote, retry
+        const titleEl = document.getElementById("title");
+        if (titleEl && titleEl.value && titleEl.value.length > 0) {
+          return false;
+        }
+        filledPage1 = false; // Value was cleared, retry
+      }
       filledPage1 = true;
 
       fillDate(book);
@@ -1946,10 +1953,20 @@
     saveState();
     await fetchSessionState();
     
-    // Auto fill visible detection interval (runs every 800ms)
-    setInterval(() => {
-      fillVisibleForm();
-    }, 800);
+    setStatus("Ready");
+    
+    // Wait 2s for Angular/Ionic to fully initialize before first fill
+    setTimeout(() => {
+      // Auto fill visible detection interval (runs every 800ms)
+      setInterval(async () => {
+        try {
+          await fillVisibleForm();
+        } catch (e) {
+          console.error("NILAM fillVisibleForm error:", e);
+          setStatus(`Fill Err: ${e.message}`);
+        }
+      }, 800);
+    }, 2000);
   }
 
   window.addEventListener("load", () => {
