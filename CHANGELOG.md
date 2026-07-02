@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0 - 2026-07-02
+
+- Use the selected panel date directly instead of adding the book index to it.
+- Add stronger AINS date-field and five-star detection.
+- Track used book IDs locally and hide them from the next records by default.
+
 ## 1.1.2 - 2026-07-01
 
 - Format ISBN values with language-appropriate hyphen groups.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.2.3
+// @version      1.3.0
 // @description  Auto-fill NILAM book records from a GitHub JSON database.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -25,6 +25,8 @@
     filtered: [],
     index: 0,
     startDate: todayIsoDate(),
+    usedIds: [],
+    showUsed: false,
     filters: {
       source: "synthetic",
       category: "all",
@@ -37,15 +39,12 @@
   let filledPage2 = false;
   let lastScrolledKey = "";
 
-  function todayKey() {
-    const d = new Date();
-    return `nilam_daily_${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-
   function saveState() {
     GM_setValue(STORE_KEY, {
       index: state.index,
       startDate: state.startDate,
+      usedIds: state.usedIds,
+      showUsed: state.showUsed,
       filters: state.filters
     });
   }
@@ -68,10 +67,12 @@
   }
 
   function applyFilters() {
+    const used = new Set(Array.isArray(state.usedIds) ? state.usedIds : []);
     state.filtered = state.books.filter((book) => {
       if (state.filters.source !== "all" && book.source !== state.filters.source) return false;
       if (state.filters.category !== "all" && book.category !== state.filters.category) return false;
       if (state.filters.language !== "all" && book.language !== state.filters.language) return false;
+      if (!state.showUsed && used.has(bookKey(book))) return false;
       return true;
     });
 
@@ -91,17 +92,59 @@
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
 
+  function normalizeIsoDate(value) {
+    const today = todayIsoDate();
+    const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return today;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const parsed = new Date(year, month - 1, day);
+    if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return today;
+
+    const maxYear = new Date().getFullYear() + 1;
+    return year > maxYear ? today : `${match[1]}-${match[2]}-${match[3]}`;
+  }
+
   function nilamLanguage(language) {
     if (language === "bm") return "Bahasa Melayu";
     if (language === "en") return "English";
     return "Lain-lain";
   }
 
-  function getBookDate(index) {
-    const baseDateStr = state.startDate || todayIsoDate();
-    const baseDate = new Date(baseDateStr);
-    baseDate.setDate(baseDate.getDate() + index);
-    return `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, "0")}-${String(baseDate.getDate()).padStart(2, "0")}`;
+  function getBookDate() {
+    state.startDate = normalizeIsoDate(state.startDate);
+    return state.startDate;
+  }
+
+  function bookKey(book) {
+    return String(book?.id || `${book?.title || ""}|${book?.author || ""}|${book?.isbn || ""}`);
+  }
+
+  function markCurrentUsed() {
+    const book = currentBook();
+    if (!book) return false;
+    const key = bookKey(book);
+    const used = new Set(Array.isArray(state.usedIds) ? state.usedIds : []);
+    used.add(key);
+    state.usedIds = Array.from(used);
+    const keepIndex = state.index;
+    applyFilters();
+    state.index = Math.max(0, Math.min(keepIndex, state.filtered.length - 1));
+    resetFillFlags();
+    saveState();
+    renderBook();
+    setStatus(`Marked used (${state.usedIds.length})`);
+    return true;
+  }
+
+  function clearUsedBooks() {
+    state.usedIds = [];
+    applyFilters();
+    resetFillFlags();
+    saveState();
+    renderBook();
+    setStatus("Used list cleared");
   }
 
   function ensureMinWordCount(text, minWords, langCode) {
@@ -142,7 +185,7 @@
     if (!book) return null;
     const lang = book.language || "bm";
     return {
-      date: getBookDate(state.index),
+      date: getBookDate(),
       title: book.title,
       pages: book.pages,
       isbn: formatIsbn(book.isbn),
@@ -188,24 +231,60 @@
     return el && el.closest("#nilam-json-assistant");
   }
 
+  function isUsableElement(el) {
+    if (!el || isInsidePanel(el)) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
   function findDateInput() {
-    // 1. Proven V7 method: the 11th input on the AINS page (excluding panel inputs)
-    const inputs = Array.from(document.querySelectorAll("input")).filter(el => !isInsidePanel(el));
-    if (inputs.length > 10) return inputs[10];
+    const directSelectors = [
+      'input[type="date"]',
+      'input[id*="date" i]',
+      'input[id*="tarikh" i]',
+      'input[name*="date" i]',
+      'input[name*="tarikh" i]',
+      'input[placeholder*="date" i]',
+      'input[placeholder*="tarikh" i]',
+      'input[aria-label*="date" i]',
+      'input[aria-label*="tarikh" i]'
+    ];
 
-    // 2. Direct type="date" fallback
-    const allDate = document.querySelectorAll('input[type="date"]');
-    for (const el of allDate) {
-      if (!isInsidePanel(el)) return el;
+    for (const selector of directSelectors) {
+      const found = Array.from(document.querySelectorAll(selector)).find(isUsableElement);
+      if (found) return found;
     }
 
-    // 3. ID match fallback
-    const idMatch = document.querySelectorAll('input[id*="date" i], input[id*="tarikh" i]');
-    for (const el of idMatch) {
-      if (!isInsidePanel(el)) return el;
+    const labels = Array.from(document.querySelectorAll("label")).filter((label) =>
+      /tarikh|date/i.test(label.textContent || "")
+    );
+    for (const label of labels) {
+      const input = label.control || label.querySelector("input");
+      if (isUsableElement(input)) return input;
     }
 
-    return null;
+    const visibleInputs = Array.from(document.querySelectorAll("input")).filter(isUsableElement);
+    const titleIndex = visibleInputs.indexOf(document.getElementById("title"));
+    if (titleIndex > 0) return visibleInputs[titleIndex - 1];
+
+    const blockedIds = new Set(["title", "noOfPage", "isbn", "author", "publisher", "publishedYear"]);
+    return visibleInputs
+      .find((el) => {
+        const type = String(el.type || "").toLowerCase();
+        if (["hidden", "radio", "checkbox", "button", "submit"].includes(type)) return false;
+        if (blockedIds.has(el.id)) return false;
+        return /^\d{4}-\d{2}-\d{2}$|\d{1,2}\/\d{1,2}\/\d{4}/.test(el.value || el.placeholder || "");
+      }) || null;
+  }
+
+  function dateValueForInput(el, isoDate) {
+    if (String(el?.type || "").toLowerCase() === "date") return isoDate;
+    const [, year, month, day] = isoDate.match(/^(\d{4})-(\d{2})-(\d{2})$/) || [];
+    if (!year) return isoDate;
+    const hint = `${el.value || ""} ${el.placeholder || ""} ${el.getAttribute("aria-label") || ""}`;
+    return hint.includes("/") ? `${day}/${month}/${year}` : isoDate;
   }
 
   function fillDate(book) {
@@ -218,7 +297,7 @@
 
     dateInput.focus();
     dateInput.click();
-    setValue(dateInput, book.date);
+    setValue(dateInput, dateValueForInput(dateInput, book.date));
 
     ["keydown", "keypress", "keyup"].forEach((type) => {
       dateInput.dispatchEvent(new KeyboardEvent(type, {
@@ -251,51 +330,76 @@
     return true;
   }
 
-  function forceClickFifthStar() {
-    const stars = Array.from(document.querySelectorAll("svg"))
-      .filter(svg => svg.outerHTML.includes("fa-star"));
+  function nearestClickable(el) {
+    let current = el;
+    for (let i = 0; current && i < 5; i += 1, current = current.parentElement) {
+      if (current.matches?.('button, label, input, [role="radio"], [role="button"], [tabindex]')) return current;
+    }
+    return el;
+  }
 
-    console.log("找到星星:", stars.length);
+  function clickLikeUser(el) {
+    if (!el) return false;
+    const target = nearestClickable(el);
+    target.scrollIntoView({ behavior: "auto", block: "center" });
+    const rect = target.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
 
-    if (stars.length >= 5) {
-      const fifthStar = stars[4];
-
-      ["mousedown", "mouseup", "click"].forEach(type => {
-        fifthStar.dispatchEvent(new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          view: window
-        }));
-      });
-
-      // Also click the closest parent elements in case click event is bound to wrapping elements
-      const parent = fifthStar.parentElement;
-      if (parent) {
-        ["mousedown", "mouseup", "click"].forEach(type => {
-          parent.dispatchEvent(new MouseEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            view: window
-          }));
-        });
-      }
-
-      const grandparent = parent ? parent.parentElement : null;
-      if (grandparent) {
-        ["mousedown", "mouseup", "click"].forEach(type => {
-          grandparent.dispatchEvent(new MouseEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            view: window
-          }));
-        });
-      }
-
-      console.log("⭐⭐⭐⭐⭐ 已精准点击第5颗星及其父级容器");
+    if (target.tagName === "INPUT" && target.type === "radio") {
+      target.checked = true;
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+      target.dispatchEvent(new Event("change", { bubbles: true }));
       return true;
     }
 
-    console.log("❌ 找不到5颗星");
+    ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((type) => {
+      target.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: x,
+        clientY: y
+      }));
+    });
+    target.click?.();
+    return true;
+  }
+
+  function forceClickFifthStar() {
+    const fiveValue = Array.from(document.querySelectorAll('input[type="radio"]'))
+      .filter(isUsableElement)
+      .find((el) => /rating|star|rate|skor|bintang/i.test(`${el.name} ${el.id}`) && String(el.value) === "5");
+    if (fiveValue && clickLikeUser(fiveValue)) {
+      setStatus("5 Star clicked");
+      return true;
+    }
+
+    const directFive = Array.from(document.querySelectorAll('button, label, [role="radio"], [role="button"], [data-value], [aria-label], [title]'))
+      .filter(isUsableElement)
+      .find((el) => /(^|\D)5(\D|$)|five|lima/i.test(`${el.textContent || ""} ${el.getAttribute("aria-label") || ""} ${el.getAttribute("title") || ""} ${el.getAttribute("data-value") || ""}`));
+    if (directFive && clickLikeUser(directFive)) {
+      setStatus("5 Star clicked");
+      return true;
+    }
+
+    const stars = Array.from(document.querySelectorAll('svg, [class*="star" i], [data-icon*="star" i]'))
+      .filter((el) => isUsableElement(el) && /star|bintang|fa-star/i.test(el.outerHTML || el.className || ""))
+      .map(nearestClickable)
+      .filter((el, index, arr) => arr.indexOf(el) === index)
+      .sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return Math.abs(ar.top - br.top) > 8 ? ar.top - br.top : ar.left - br.left;
+      });
+
+    if (stars.length >= 5 && clickLikeUser(stars[4])) {
+      setStatus("5 Star clicked");
+      return true;
+    }
+
+    console.log("NILAM Assistant: five-star control not found", { radio: Boolean(fiveValue), stars: stars.length });
+    setStatus("5 Star not found");
     return false;
   }
 
@@ -379,11 +483,7 @@
 
     if (btnPasti) {
       btnPasti.click();
-      if (state.filtered.length) {
-        state.index = Math.min(state.index + 1, state.filtered.length - 1);
-        resetFillFlags();
-        renderBook();
-      }
+      markCurrentUsed();
       return true;
     }
 
@@ -447,7 +547,7 @@
     const el = document.querySelector("#nja-count-bar");
     if (!el) return;
     const f = state.filters;
-    el.innerHTML = `<b>${state.filtered.length}</b> / ${state.books.length} total | ${f.source} | ${f.category} | ${f.language}`;
+    el.innerHTML = `<b>${state.filtered.length}</b> / ${state.books.length} total | used ${state.usedIds.length} | ${f.source} | ${f.category} | ${f.language}`;
   }
 
   function renderBook() {
@@ -703,6 +803,11 @@
         <button id="nja-reload" type="button" class="nja-btn nja-btn-blue">Reload</button>
         <button id="nja-reset" type="button" class="nja-btn nja-btn-red">Reset</button>
       </div>
+      <div class="nja-actions-3">
+        <button id="nja-used" type="button" class="nja-btn nja-btn-amber">Mark Used</button>
+        <button id="nja-toggle-used" type="button" class="nja-btn nja-btn-gray">Show Used</button>
+        <button id="nja-clear-used" type="button" class="nja-btn nja-btn-red">Clear Used</button>
+      </div>
       <div id="nilam-json-assistant-status">Loading...</div>
       <div id="nilam-json-assistant-body"></div>
     `;
@@ -755,6 +860,17 @@
       if (button.id === "nja-scroll") scrollToBottomHard();
       if (button.id === "nja-reload") { await reloadJson(); return; }
       if (button.id === "nja-reset") { resetProgress(); return; }
+      if (button.id === "nja-used") { markCurrentUsed(); return; }
+      if (button.id === "nja-clear-used") { clearUsedBooks(); return; }
+      if (button.id === "nja-toggle-used") {
+        state.showUsed = !state.showUsed;
+        applyFilters();
+        resetFillFlags();
+        saveState();
+        renderBook();
+        setStatus(state.showUsed ? "Showing used books" : "Hiding used books");
+        return;
+      }
 
       const copyField = button.dataset.copy;
       if (copyField) {
@@ -768,17 +884,12 @@
   }
 
   async function main() {
+    state.startDate = normalizeIsoDate(state.startDate);
+    state.usedIds = Array.isArray(state.usedIds) ? state.usedIds : [];
+    state.showUsed = Boolean(state.showUsed);
     createPanel();
     state.books = await loadJson(DATA_URL);
     applyFilters();
-
-    const savedDaily = GM_getValue(todayKey(), null);
-    if (savedDaily) {
-      const dailyIndex = state.filtered.findIndex((book) => book.id === savedDaily);
-      if (dailyIndex >= 0) state.index = dailyIndex;
-    } else if (state.filtered.length) {
-      GM_setValue(todayKey(), state.filtered[state.index].id);
-    }
 
     renderBook();
     setInterval(fillVisibleForm, 700);
