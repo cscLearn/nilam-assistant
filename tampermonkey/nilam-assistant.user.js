@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM JSON Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      2.0.2
+// @version      2.0.3
 // @description  Auto-fill AINS NILAM book records deterministically synced with Cloudflare Worker.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -549,48 +549,52 @@
   function hookFetch() {
     const originalFetch = window.fetch;
     window.fetch = async function (...args) {
-      const url = args[0];
-      const options = args[1] || {};
-
       let urlStr = "";
       let headers = {};
 
-      if (url instanceof Request) {
-        urlStr = url.url;
-        url.headers.forEach((value, key) => {
-          headers[key.toLowerCase()] = value;
-        });
-      } else {
-        urlStr = String(url);
-        if (options.headers) {
-          if (options.headers instanceof Headers) {
-            options.headers.forEach((value, key) => {
-              headers[key.toLowerCase()] = value;
-            });
-          } else {
-            Object.keys(options.headers).forEach(key => {
-              headers[key.toLowerCase()] = String(options.headers[key]);
-            });
+      try {
+        const url = args[0];
+        const options = args[1] || {};
+
+        if (url instanceof Request) {
+          urlStr = url.url;
+          url.headers.forEach((value, key) => {
+            headers[key.toLowerCase()] = value;
+          });
+        } else {
+          urlStr = String(url);
+          if (options.headers) {
+            if (options.headers instanceof Headers) {
+              options.headers.forEach((value, key) => {
+                headers[key.toLowerCase()] = value;
+              });
+            } else if (typeof options.headers === "object") {
+              Object.keys(options.headers).forEach(key => {
+                headers[key.toLowerCase()] = String(options.headers[key]);
+              });
+            }
           }
         }
-      }
 
-      const auth = headers["authorization"];
-      if (auth && auth.startsWith("Bearer ")) {
-        tokenIntercepted = auth;
-        try {
-          const payload = JSON.parse(atob(auth.split(".")[1]));
-          userMeId = payload.id;
-        } catch (e) {
-          console.error("NILAM Assistant: Failed to parse JWT token", e);
+        const auth = headers["authorization"];
+        if (auth && auth.startsWith("Bearer ")) {
+          tokenIntercepted = auth;
+          try {
+            const payload = JSON.parse(atob(auth.split(".")[1]));
+            userMeId = payload.id;
+          } catch (e) {
+            console.error("NILAM Assistant: Failed to parse JWT token", e);
+          }
         }
+      } catch (e) {
+        console.error("NILAM Assistant: hookFetch header parse error", e);
       }
 
-      const response = await originalFetch(...args);
+      const response = await originalFetch.apply(this, args);
 
-      if (urlStr.includes("/api/users/me")) {
-        const clone = response.clone();
-        try {
+      try {
+        if (urlStr.includes("/api/users/me")) {
+          const clone = response.clone();
           const userObj = await clone.json();
           const email = userObj.email;
           if (email && email !== state.profile) {
@@ -599,9 +603,9 @@
             saveState();
             await fetchSessionState();
           }
-        } catch (e) {
-          console.error("NILAM Assistant: Error reading users/me", e);
         }
+      } catch (e) {
+        console.error("NILAM Assistant: Error reading users/me", e);
       }
 
       return response;
