@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.7 - 2026-07-02
+
+- Restore the 1.4.0 stable selector and star-click logic after the V2 rollback.
+- Migrate old saved index progress into local used-book records.
+- Make confirmation detection less brittle and preserve the submitted book while moving to the next record.
+
 ## 2.0.6 - 2026-07-02
 
 - Re-save the userscript without UTF-8 BOM so Tampermonkey can read metadata cleanly.
