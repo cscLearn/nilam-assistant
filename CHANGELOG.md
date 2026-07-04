@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.5.5-api - 2026-07-03
+
+- Implement simulated human submit interval (60s cooldown limit) with active countdown and elapsed time indicators.
+
+## 0.5.2-api - 2026-07-03
+
+- Fix UI count rendering lag by cleaning up legacy `state.dailySubmits` references and directly reading `state.todaySubmitCount`.
+
+## 0.5.1-api - 2026-07-03
+
+- Adjust AINS official counter key parsing to support lowercase `"count"` field.
+
+## 0.5.0-api - 2026-07-03
+
+- Auto-sync today's submissions count from AINS official counter API (`/api/student-informations/info/counter`).
+
+## 0.4.5-api - 2026-07-03
+
+- Parse and display timezone-safe daily counts from server UTC `createdAt` timestamps.
+
+## 0.4.2-api - 2026-07-03
+
+- Set up hard daily submission limit lock (30 books) to prevent account risk (resettable by Clear Token).
+
+## 0.4.1-api - 2026-07-03
+
+- Support quick date adjustment arrows (◀ / ▶) and auto-increment selected date on successful submission.
+
+## 0.4.0-api - 2026-07-03
+
+- Optimize multi-account layout by showing precise deduplicated history count ratio (e.g. 76/81).
+
+## 0.3.9-api - 2026-07-03
+
+- Apply viewport boundary constraints (`minGap = 10px`) and self-adjusting layout positioning on window resize or panel toggle.
+
+## 0.3.8-api - 2026-07-03
+
+- Support mobile touch drag events (`touchstart`, `touchmove`, `touchend`) for the floating panel.
+- Fix AINS language category mapping for other languages to `"others"`.
+
+## 0.3.7-api - 2026-07-03
+
+- Show token expiry status in the floating panel and block Submit/Sync/Replay when the token is expired.
+- Detect account switches from the captured JWT, clear only the old account history, and keep the API template.
+- Make Clear Token preserve the captured API template so a new account can refresh token without manually submitting another book.
+
+## 0.3.6-api - 2026-07-03
+
+- Add local provider preflight validation before Submit API or Replay.
+- Show diagnostics with the failing provider entry and field name instead of blindly retrying failed POSTs.
+- Restore Replay as a controlled one-shot test for the captured successful payload.
+
+## 0.3.5-api - 2026-07-03
+
+- Fix history Sync to use page-context `fetch` with credentials instead of Tampermonkey cross-origin requests.
+- Preserve replayable captured headers and normalize the authorization header.
+
+## 0.2.5-api - 2026-07-03
+
+- Show the API userscript version in the floating panel.
+- Preserve captured request headers when replaying or submitting through the AINS API.
+- Add a Replay button to test whether the captured payload can be posted unchanged.
+
+## 0.1.0-api - 2026-07-03
+
+- Add a separate `nilam-api.user.js` userscript with a date/book panel and manual Submit API button.
+- Capture the real AINS NILAM POST template from one normal manual submission, then reuse it for selected books.
+
 ## 2.0.7 - 2026-07-02
 
 - Restore the 1.4.0 stable selector and star-click logic after the V2 rollback.

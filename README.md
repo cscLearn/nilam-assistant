@@ -10,6 +10,14 @@ Install the Tampermonkey script by clicking the following URL (with Tampermonkey
 https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-assistant.user.js
 ```
 
+API-submit version:
+
+```text
+https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
+```
+
+For the API version, open AINS while logged in, submit one NILAM record manually once so the script can capture the real AINS POST URL/body, then pick a date and book in the panel and press **Submit API**.
+
 ## Features
 
 - **Seed-Based Book Generator**: Evaluates book fields (title, summary, moral lesson, pages, ISBN) on-the-fly via salted SHA-256 hashes of `profile` + `sessionId` + `currentBookIndex` + `fieldName`. Guaranteed unique, deterministic, and doesn't download 4MB database files.
@@ -17,6 +25,7 @@ https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nil
 - **Element Selector Calibration**: Allows manual calibration of Date Inputs and 5-Star buttons to save custom CSS selectors locally.
 - **Improved UI**: Features a beautiful draggable, collapsible purple controller panel that saves screen coordinates.
 - **Automatic Interception**: Wraps `window.fetch` to auto-capture JWT auth credentials and user email profiles.
+- **API Submit Panel**: Lets you choose a date and book, then POST through the captured AINS NILAM API after you confirm with the Submit API button.
 
 ## Backend Deployment (Cloudflare Worker)
 
