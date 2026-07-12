@@ -1,9 +1,11 @@
 // ==UserScript==
-// @name         NILAM API Assistant 0.6
+// @name         NILAM API Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
 // @version      0.7.0
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
+// @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
+// @downloadURL  https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
 // @match        https://ains.moe.gov.my/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
