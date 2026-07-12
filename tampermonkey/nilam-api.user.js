@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.6.0
+// @version      0.6.1
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -20,7 +20,7 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.6.0";
+  const SCRIPT_VERSION = "0.6.1";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
   const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
@@ -474,6 +474,7 @@
     selectedDate: todayIsoDate(),
     filters: { category: "all", language: "bm" },
     apiTemplate: null,
+    authHeader: "",
     userId: null,
     tokenExpiresAt: null,
     submittedTitles: [], // Stores lowercase array of titles to prevent duplicates locally
@@ -496,6 +497,13 @@
     state.books = BOOKS_DATABASE;
   }
 
+  if (state.apiTemplate && !state.apiTemplate.bodyText) {
+    // v0.6.0 created a synthetic template from a token. Only a real AINS POST
+    // has the fields needed to safely submit a record.
+    state.authHeader = state.authHeader || state.apiTemplate.headers?.authorization || "";
+    state.apiTemplate = null;
+  }
+
   if (state.studentName === "FAQ") {
     state.studentName = "";
   }
@@ -511,6 +519,7 @@
       selectedDate: state.selectedDate,
       filters: state.filters,
       apiTemplate: state.apiTemplate,
+      authHeader: state.authHeader,
       userId: state.userId,
       tokenExpiresAt: state.tokenExpiresAt,
       submittedTitles: state.submittedTitles,
@@ -824,7 +833,7 @@
   }
 
   function tokenStatus() {
-    if (!state.apiTemplate?.headers?.authorization) {
+    if (!state.authHeader && !state.apiTemplate?.headers?.authorization) {
       return { ok: false, label: "无登录凭证" };
     }
     if (!state.tokenExpiresAt) {
@@ -847,6 +856,7 @@
 
   function updateCapturedToken(authHeader) {
     if (authHeader && authHeader.startsWith("Bearer ")) {
+      state.authHeader = authHeader;
       try {
         const payload = parseJwtPayload(authHeader);
         if (payload && payload.id) {
@@ -861,7 +871,7 @@
             state.todaySubmitCount = 0;
             stopAutoSubmit(`检测到账号切换：${previousUserId} -> ${state.userId}。正在同步历史记录。`, { keepResume: state.autoResumeSubmit });
             setTimeout(() => {
-              if (state.apiTemplate && tokenStatus().ok) fetchHistory(true);
+              if (state.authHeader && tokenStatus().ok) fetchHistory(true);
             }, 0);
           }
           console.log("NILAM API Assistant: Synced User ID ->", state.userId);
@@ -873,17 +883,6 @@
       if (state.apiTemplate) {
         state.apiTemplate.headers["authorization"] = authHeader;
         console.log("NILAM API Assistant: Automatically updated Bearer Token in background.");
-      } else {
-        state.apiTemplate = {
-          url: "https://ains-api.moe.gov.my/api/nilam-records",
-          headers: { "authorization": authHeader, "content-type": "application/json" },
-          bodyText: "",
-          payload: null,
-          capturedAt: new Date().toISOString()
-        };
-        console.log("NILAM API Assistant: Auto-constructed apiTemplate from Bearer token.");
-        if (panelReady) setStatus("API 凭证自动捕获成功。可以开始提交。");
-        setTimeout(() => { if (state.userId) fetchHistory(); }, 500);
       }
       saveState();
       renderApiStatus();
@@ -1121,14 +1120,14 @@
       ...(state.apiTemplate?.headers || {}),
       ...extra
     };
-    const auth = headers.authorization || headers.Authorization;
+    const auth = state.authHeader || headers.authorization || headers.Authorization;
     delete headers.Authorization;
     if (auth) headers.authorization = auth;
     return headers;
   }
 
   async function fetchHistory(renderAfter = true) {
-    if (!state.apiTemplate || !state.userId) {
+    if (!state.userId) {
       setStatus("同步失败：暂无登录凭证。");
       return;
     }
@@ -1464,14 +1463,14 @@
         return "cooldown";
       }
     }
-    if (!state.apiTemplate) {
+    if (!state.apiTemplate?.bodyText) {
       setStatus("未捕获凭证：请先在 AINS 网页上手动提交一次 NILAM 以捕获 API 凭证。");
       return "missing_template";
     }
     if (!ensureUsableToken("提交")) return "missing_token";
 
     if (!state.userId) {
-      let auth = state.apiTemplate.headers["Authorization"] || state.apiTemplate.headers["authorization"];
+      let auth = state.authHeader || state.apiTemplate.headers["Authorization"] || state.apiTemplate.headers["authorization"];
       updateCapturedToken(auth);
       if (!state.userId) {
         setStatus("用户 ID 缺失。请尝试重新登录。");
@@ -1597,9 +1596,11 @@
     const el = document.querySelector("#nia-api-status");
     const status = tokenStatus();
     if (el) {
-      el.innerHTML = state.apiTemplate
+      el.innerHTML = state.apiTemplate?.bodyText
         ? `凭证捕获：<span style="color:#10b981;font-weight:700;">成功</span><br><span style="font-size:10px;color:#6b7280;">User ID: ${state.userId || "等待中"} | ${status.label} | v${SCRIPT_VERSION}</span>`
-        : `<span style="color:#ef4444;font-weight:700;">未捕获凭证</span><br><span style="font-size:10px;color:#6b7280;">请在 AINS 手动提交一次以捕获。 | v${SCRIPT_VERSION}</span>`;
+        : state.authHeader
+          ? `<span style="color:#d97706;font-weight:700;">登录凭证已捕获</span><br><span style="font-size:10px;color:#6b7280;">仍需 AINS 原生提交模板；请手动提交一笔记录。 | v${SCRIPT_VERSION}</span>`
+          : `<span style="color:#ef4444;font-weight:700;">未捕获凭证</span><br><span style="font-size:10px;color:#6b7280;">请在 AINS 手动提交一次以捕获。 | v${SCRIPT_VERSION}</span>`;
     }
     const countEl = document.querySelector("#nia-history-count");
     if (countEl) {
@@ -1705,7 +1706,7 @@
       el.value = "";
       return;
     }
-    if (state.apiTemplate && state.userId && typeof CryptoJS !== "undefined") {
+    if (state.apiTemplate?.bodyText && state.userId && typeof CryptoJS !== "undefined") {
       el.value = JSON.stringify(buildAinsPayload(book), null, 2);
     } else {
       el.value = JSON.stringify(book, null, 2);
@@ -1728,7 +1729,7 @@
   async function refreshBooks() {
     setStatus("Refreshing unused books...");
     try {
-      if (state.apiTemplate && state.userId && tokenStatus().ok) {
+      if (state.authHeader && state.userId && tokenStatus().ok) {
         await fetchHistory(false);
       } else if (!(state.submittedTitles || []).length && !(state.submittedIsbns || []).length) {
         throw new Error("sync history first so used books can be excluded");
@@ -1936,7 +1937,7 @@
       stopAutoSubmit("今日额度已满，自动恢复已取消。");
       return;
     }
-    if (!state.apiTemplate || !state.userId) {
+    if (!state.apiTemplate?.bodyText || !state.userId) {
       setStatus("等待 AINS 捕获登录凭证后自动恢复提交。");
       return;
     }
@@ -1977,8 +1978,8 @@
           alert("🎉 NILAM 自动挂机已完成：\n\n今日 30 本提交额度已满，自动挂机已停止。");
           return;
         }
-        if (!state.apiTemplate) {
-          refreshAinsAndResume("API 凭证丢失，正在刷新 AINS，刷新后自动恢复提交。");
+        if (!state.apiTemplate?.bodyText) {
+          stopAutoSubmit("缺少真实 AINS 提交模板；请先手动提交一笔记录。");
           return;
         }
         if (!tokenStatus().ok) {
@@ -2241,6 +2242,7 @@
             delete state.apiTemplate.headers.authorization;
           }
           state.userId = null;
+          state.authHeader = "";
           state.tokenExpiresAt = null;
           state.submittedTitles = [];
           state.submittedIsbns = [];
@@ -2366,7 +2368,7 @@
         tryCreatePanel();
         renderBookSelect();
         setStatus(`本地书籍数据库已就绪：共 30 本。`);
-        if (state.apiTemplate && state.userId) {
+        if (state.authHeader && state.userId) {
           fetchHistory(); // Sync history on load if credentials exist
         }
         resumeAutoSubmitIfReady();
