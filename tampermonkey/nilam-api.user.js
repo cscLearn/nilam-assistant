@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.6.2
+// @version      0.7.0
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -20,13 +20,14 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.6.2";
+  const SCRIPT_VERSION = "0.7.0";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
   const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
   const WORKER_URL = String(GM_getValue("nilam_worker_url", "https://nilam-book.cscflow.com") || localStorage.getItem("nilam_worker_url") || "https://nilam-book.cscflow.com").replace(/\/+$/, "");
   const WORKER_TOKEN = String(GM_getValue("nilam_worker_token", "sk-nilambooks-fc62df67e2d7d8a9") || localStorage.getItem("nilam_worker_token") || "sk-nilambooks-fc62df67e2d7d8a9").trim();
   const PROVIDER_SECRET = "OypAJ9vA==,OJEpNYuu2h";
+  const AINS_API_ENDPOINT = "https://ains-api.moe.gov.my/api/nilam-records";
   const PROVIDER_ENTRY_ORDER = [
     "user",
     "type",
@@ -473,7 +474,6 @@
     selectedKey: "",
     selectedDate: todayIsoDate(),
     filters: { category: "all", language: "bm" },
-    apiTemplate: null,
     authHeader: "",
     userId: null,
     tokenExpiresAt: null,
@@ -497,12 +497,6 @@
     state.books = BOOKS_DATABASE;
   }
 
-  if (state.apiTemplate && !state.apiTemplate.bodyText) {
-    // v0.6.0 created a synthetic template from a token. Only a real AINS POST
-    // has the fields needed to safely submit a record.
-    state.authHeader = state.authHeader || state.apiTemplate.headers?.authorization || "";
-    state.apiTemplate = null;
-  }
 
   if (state.studentName === "FAQ") {
     state.studentName = "";
@@ -518,7 +512,6 @@
       selectedKey: state.selectedKey,
       selectedDate: state.selectedDate,
       filters: state.filters,
-      apiTemplate: state.apiTemplate,
       authHeader: state.authHeader,
       userId: state.userId,
       tokenExpiresAt: state.tokenExpiresAt,
@@ -635,30 +628,6 @@
     if (category) category.value = state.filters.category;
     const language = document.querySelector("#nia-language");
     if (language) language.value = state.filters.language;
-  }
-
-  function headersToObject(headers) {
-    const result = {};
-    new Headers(headers || {}).forEach((value, key) => {
-      const lower = key.toLowerCase();
-      if (!["content-length", "host", "origin", "referer", "user-agent"].includes(lower)) {
-        result[lower] = value;
-      }
-    });
-    return result;
-  }
-
-  function bodyToTemplateBody(body) {
-    if (typeof body === "string") return body;
-    if (body instanceof URLSearchParams) return body.toString();
-    if (body instanceof FormData) {
-      try {
-        return JSON.stringify(Object.fromEntries(body.entries()));
-      } catch (e) {
-        return "";
-      }
-    }
-    return "";
   }
 
   function loadRemoteBooks() {
@@ -817,13 +786,6 @@
     return batch;
   }
 
-  function looksLikeNilamPost(url, bodyText) {
-    const urlStr = String(url || "");
-    if (!urlStr.includes("ains-api") && !urlStr.includes("/api/")) return false;
-    if (!bodyText || bodyText.length > 20000) return false;
-    return /title|judul|isbn|author|publisher|summary|rumusan|review|ulasan|tarikh|date/i.test(bodyText);
-  }
-
   function parseJwtPayload(authHeader) {
     if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
     const token = authHeader.slice(7);
@@ -833,7 +795,7 @@
   }
 
   function tokenStatus() {
-    if (!state.authHeader && !state.apiTemplate?.headers?.authorization) {
+    if (!state.authHeader) {
       return { ok: false, label: "无登录凭证" };
     }
     if (!state.tokenExpiresAt) {
@@ -891,41 +853,6 @@
     }
   }
 
-  function captureTemplate(url, method, headers, body) {
-    const headersObj = headersToObject(headers);
-    let auth = headersObj["authorization"];
-    updateCapturedToken(auth);
-
-    if (String(method || "GET").toUpperCase() !== "POST") return;
-    const bodyText = bodyToTemplateBody(body);
-    if (!looksLikeNilamPost(url, bodyText)) return;
-
-    state.apiTemplate = {
-      url: String(url),
-      headers: headersObj,
-      bodyText: bodyText,
-      payload: parseJsonOrNull(bodyText),
-      capturedAt: new Date().toISOString()
-    };
-    saveState();
-    setStatus("API 凭证捕获成功。可以开始提交。");
-    renderApiStatus();
-    fetchHistory(); // Attempt background history sync once token is captured
-  }
-
-  function parseJsonOrNull(text) {
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function capturedDataTemplate() {
-    const payload = state.apiTemplate?.payload || parseJsonOrNull(state.apiTemplate?.bodyText || "");
-    return payload?.data && typeof payload.data === "object" ? payload.data : {};
-  }
-
   function providerPayload(data) {
     const payload = {};
     for (const key of PROVIDER_ENTRY_ORDER) {
@@ -935,14 +862,12 @@
   }
 
   function buildAinsPayload(book) {
-    const base = capturedDataTemplate();
     const data = {
-      ...base,
-      user: Number(state.userId || base.user),
-      type: base.type || "book",
+      user: Number(state.userId),
+      type: "book",
       date: book.date,
       title: book.title,
-      bookType: base.bookType || "physical",
+      bookType: "physical",
       category: apiCategory(book.category),
       noOfPage: Number(book.pages),
       isbn: book.isbn,
@@ -952,8 +877,8 @@
       language: apiLanguage(book.language),
       summary: book.rumusan,
       review: book.lesson,
-      rating: Number(book.rating || base.rating || 5),
-      reviewIsVideo: Boolean(base.reviewIsVideo)
+      rating: Number(book.rating || 5),
+      reviewIsVideo: false
     };
 
     data.provider = CryptoJS.AES.encrypt(
@@ -1015,35 +940,6 @@
     el.textContent = result.ok
       ? result.message
       : `${result.message}${result.key ? ` | body=${result.bodyValue} provider=${result.providerValue}` : ""}`;
-  }
-
-  async function exportShareableTemplate() {
-    if (!state.apiTemplate?.bodyText) {
-      setStatus("导出失败：请先用 AINS 原生表单手动提交一笔记录。");
-      return;
-    }
-    const payload = parseJsonOrNull(state.apiTemplate.bodyText);
-    const data = payload?.data && typeof payload.data === "object" ? payload.data : {};
-    const staticData = {};
-    for (const key of ["type", "bookType", "reviewIsVideo", "rating"]) {
-      if (Object.hasOwn(data, key)) staticData[key] = data[key];
-    }
-    const template = JSON.stringify({
-      endpoint: new URL(state.apiTemplate.url).pathname,
-      fields: Object.keys(data).filter(key => key !== "provider").sort(),
-      staticData
-    }, null, 2);
-    const debug = document.querySelector("#nia-debug-template");
-    if (debug) {
-      debug.value = template;
-      debug.closest("details")?.setAttribute("open", "");
-    }
-    try {
-      await navigator.clipboard.writeText(template);
-      setStatus("共享模板已复制：不含 token、Cookie、用户 ID、书名或日期。");
-    } catch (error) {
-      setStatus("共享模板已显示；请手动复制，不含个人凭证。");
-    }
   }
 
   function normalizeTitle(title) {
@@ -1145,13 +1041,8 @@
   }
 
   function requestHeaders(extra = {}) {
-    const headers = {
-      ...(state.apiTemplate?.headers || {}),
-      ...extra
-    };
-    const auth = state.authHeader || headers.authorization || headers.Authorization;
-    delete headers.Authorization;
-    if (auth) headers.authorization = auth;
+    const headers = { ...extra };
+    if (state.authHeader) headers.authorization = state.authHeader;
     return headers;
   }
 
@@ -1243,36 +1134,6 @@
     }
   }
 
-  async function replayCapturedApi() {
-    if (!state.apiTemplate?.bodyText) {
-      setStatus("重放失败：未捕获到原始数据。");
-      return;
-    }
-
-    const capturedPayload = parseJsonOrNull(state.apiTemplate.bodyText);
-    const preflight = validatePayloadLocally(capturedPayload);
-    setDiagnostics(preflight);
-    if (!preflight.ok) {
-      setStatus("重放失败：本地预校验未通过。");
-      return;
-    }
-    if (!ensureUsableToken("单步测试提交")) return;
-
-    try {
-      setStatus("正在测试提交捕获的数据...");
-      const response = await fetch(state.apiTemplate.url, {
-        method: "POST",
-        credentials: "include",
-        headers: requestHeaders({ "content-type": "application/json" }),
-        body: state.apiTemplate.bodyText
-      });
-      const text = await response.text();
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 240)}`);
-      setStatus("测试提交成功。捕获的 API 数据有效。");
-    } catch (error) {
-      setStatus(`测试提交失败：${error.message}`);
-    }
-  }
 
   function isCurrentBookDuplicate() {
     return isUsedBook(currentBook(), submittedTitleSet(), submittedIsbnSet());
@@ -1318,7 +1179,6 @@
 
       const response = await originalFetch.apply(this, arguments);
       if (response.ok) {
-        captureTemplate(url, method, mergedHeaders, body);
 
         // Capture/Intercept history GET requests dynamically to update local duplicates
         if (url.includes("nilam-records") && String(method).toUpperCase() === "GET") {
@@ -1398,7 +1258,6 @@
         if (this.status >= 200 && this.status < 300 && this.__nilamApi) {
           const url = new URL(this.__nilamApi.url, location.href).href;
           const method = this.__nilamApi.method;
-          captureTemplate(url, method, this.__nilamApi.headers, body);
 
           // Capture/Intercept XHR history GET requests
           if (url.includes("nilam-records") && String(method).toUpperCase() === "GET") {
@@ -1492,14 +1351,10 @@
         return "cooldown";
       }
     }
-    if (!state.apiTemplate?.bodyText) {
-      setStatus("未捕获凭证：请先在 AINS 网页上手动提交一次 NILAM 以捕获 API 凭证。");
-      return "missing_template";
-    }
     if (!ensureUsableToken("提交")) return "missing_token";
 
     if (!state.userId) {
-      let auth = state.authHeader || state.apiTemplate.headers["Authorization"] || state.apiTemplate.headers["authorization"];
+      let auth = state.authHeader;
       updateCapturedToken(auth);
       if (!state.userId) {
         setStatus("用户 ID 缺失。请尝试重新登录。");
@@ -1521,11 +1376,11 @@
         ...requestHeaders({ "content-type": "application/json" })
       };
 
-      console.log("NILAM API Assistant: Request URL ->", state.apiTemplate.url);
+      console.log("NILAM API Assistant: Request URL ->", AINS_API_ENDPOINT);
       console.log("NILAM API Assistant: Request Headers ->", headers);
       console.log("NILAM API Assistant: Request Payload ->", bodyPayload);
 
-      const response = await fetch(state.apiTemplate.url, {
+      const response = await fetch(AINS_API_ENDPOINT, {
         method: "POST",
         credentials: "include",
         headers,
@@ -1625,11 +1480,9 @@
     const el = document.querySelector("#nia-api-status");
     const status = tokenStatus();
     if (el) {
-      el.innerHTML = state.apiTemplate?.bodyText
-        ? `凭证捕获：<span style="color:#10b981;font-weight:700;">成功</span><br><span style="font-size:10px;color:#6b7280;">User ID: ${state.userId || "等待中"} | ${status.label} | v${SCRIPT_VERSION}</span>`
-        : state.authHeader
-          ? `<span style="color:#d97706;font-weight:700;">登录凭证已捕获</span><br><span style="font-size:10px;color:#6b7280;">仍需 AINS 原生提交模板；请手动提交一笔记录。 | v${SCRIPT_VERSION}</span>`
-          : `<span style="color:#ef4444;font-weight:700;">未捕获凭证</span><br><span style="font-size:10px;color:#6b7280;">请在 AINS 手动提交一次以捕获。 | v${SCRIPT_VERSION}</span>`;
+      el.innerHTML = status.ok
+        ? `<span style="color:#10b981;font-weight:700;">就绪</span><br><span style="font-size:10px;color:#6b7280;">User ID: ${state.userId || "获取中"} | ${status.label} | v${SCRIPT_VERSION}</span>`
+        : `<span style="color:#ef4444;font-weight:700;">未捕获凭证</span><br><span style="font-size:10px;color:#6b7280;">请正常登录 AINS 即可自动捕获。 | v${SCRIPT_VERSION}</span>`;
     }
     const countEl = document.querySelector("#nia-history-count");
     if (countEl) {
@@ -1735,7 +1588,7 @@
       el.value = "";
       return;
     }
-    if (state.apiTemplate?.bodyText && state.userId && typeof CryptoJS !== "undefined") {
+    if (state.userId && typeof CryptoJS !== "undefined") {
       el.value = JSON.stringify(buildAinsPayload(book), null, 2);
     } else {
       el.value = JSON.stringify(book, null, 2);
@@ -1966,7 +1819,7 @@
       stopAutoSubmit("今日额度已满，自动恢复已取消。");
       return;
     }
-    if (!state.apiTemplate?.bodyText || !state.userId) {
+    if (!state.userId) {
       setStatus("等待 AINS 捕获登录凭证后自动恢复提交。");
       return;
     }
@@ -2200,10 +2053,8 @@
         </details>
         <div class="nia-actions-3">
           <button id="nia-submit" type="button" class="nia-btn nia-submit">点击提交至 AINS (API)</button>
-          <button id="nia-replay-api" type="button" class="nia-btn nia-secondary">单步测试</button>
           <button id="nia-sync-api" type="button" class="nia-btn nia-secondary">同步记录</button>
         </div>
-        <button id="nia-export-template" type="button" class="nia-btn nia-secondary" style="width:100%;margin-top:8px;">导出共享模板</button>
         <button id="nia-auto-submit" type="button" class="nia-btn nia-secondary" style="width:100%;margin-top:8px;">🚀 自动提交 (1分钟/次)</button>
         <button id="nia-clear-api" type="button" class="nia-btn nia-secondary" style="width:100%;margin-top:8px;">清除登录凭证</button>
         <details class="nia-debug-details">
@@ -2265,9 +2116,7 @@
         if (button.id === "nia-submit") await submitApi();
         if (button.id === "nia-auto-submit") toggleAutoSubmit();
         if (button.id === "nia-refresh-books") await refreshBooks();
-        if (button.id === "nia-replay-api") await replayCapturedApi();
         if (button.id === "nia-sync-api") await fetchHistory();
-        if (button.id === "nia-export-template") await exportShareableTemplate();
         if (button.id === "nia-clear-api") {
           if (state.apiTemplate) {
             delete state.apiTemplate.headers.authorization;
