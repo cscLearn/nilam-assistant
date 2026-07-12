@@ -4,17 +4,11 @@ Tampermonkey helper script and state sync backend for automated AINS NILAM book 
 
 ## Installation
 
-Install the Tampermonkey script by clicking the following URL (with Tampermonkey extension installed):
+Recommended install: **NILAM API Assistant v0.6.0** (requires Tampermonkey).
 
-```text
-https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-assistant.user.js
-```
+[Install NILAM API Assistant v0.6.0](https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js)
 
-API-submit version:
-
-```text
-https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
-```
+The JSON v2 script is no longer recommended and is intentionally not listed as an installation option.
 
 For the API version, open AINS while logged in, submit one NILAM record manually once so the script can capture the real AINS POST URL/body, then pick a date and book in the panel and press **Submit API**.
 
