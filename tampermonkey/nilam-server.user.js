@@ -1,15 +1,15 @@
 // ==UserScript==
-// @name         NILAM API Assistant 0.6
+// @name         NILAM Server Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
 // @version      0.6.0
-// @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
+// @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Uses cloud AI book server.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
-// @connect      raw.githubusercontent.com
+// @connect      nilam-book.cscflow.com
 // @connect      ains-api.moe.gov.my
 // @connect      *
 // @require      https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js
@@ -21,11 +21,9 @@
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
   const SCRIPT_VERSION = "0.6.0";
-  const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
+  const API_BASE_URL = "https://nilam-book.cscflow.com";
+  const API_TOKEN = "sk-nilambooks-fc62df67e2d7d8a9";
   const REFRESH_BOOK_COUNT = 30;
-  const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
-  const WORKER_URL = String(GM_getValue("nilam_worker_url", "https://nilam-book.cscflow.com") || localStorage.getItem("nilam_worker_url") || "https://nilam-book.cscflow.com").replace(/\/+$/, "");
-  const WORKER_TOKEN = String(GM_getValue("nilam_worker_token", "sk-nilambooks-fc62df67e2d7d8a9") || localStorage.getItem("nilam_worker_token") || "sk-nilambooks-fc62df67e2d7d8a9").trim();
   const PROVIDER_SECRET = "OypAJ9vA==,OJEpNYuu2h";
   const PROVIDER_ENTRY_ORDER = [
     "user",
@@ -40,432 +38,9 @@
     "review"
   ];
 
-  // Pre-compiled 30 unique high-quality books (10 Malay, 10 English, 10 Chinese)
-  const BOOKS_DATABASE = [
-    // === 10 Malay Books ===
-    {
-      "id": "loc-fik-bm-000001",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "bm",
-      "title": "Sang Kancil dengan Buaya",
-      "author": "Tradisional",
-      "publisher": "Dewan Bahasa dan Pustaka",
-      "year": 2018,
-      "pages": 24,
-      "isbn": "978-983-49-0101-1",
-      "rumusan": "Kisah kepintaran Sang Kancil memperdayakan buaya-buaya di sungai untuk menyeberang bagi mendapatkan buah-buahan segar di seberang sungai.",
-      "lesson": "Kebijaksanaan akal sangat penting untuk menyelesaikan masalah yang dihadapi."
-    },
-    {
-      "id": "loc-fik-bm-000002",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "bm",
-      "title": "Misteri Rumah di Hujung Kampung",
-      "author": "Ahmad Faisal",
-      "publisher": "Penerbitan Fajar Bakti",
-      "year": 2020,
-      "pages": 84,
-      "isbn": "978-967-301-002-2",
-      "rumusan": "Sekumpulan kanak-kanak menyiasat sebuah rumah lama yang dianggap berhantu dan mendapati ia adalah tempat persembunyian pencuri.",
-      "lesson": "Kita haruslah berani dan sentiasa bekerjasama dalam melakukan sesuatu perkara."
-    },
-    {
-      "id": "loc-fik-bm-000003",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "bm",
-      "title": "Srikandi Bangsa",
-      "author": "Siti Aminah",
-      "publisher": "Utusan Publications",
-      "year": 2021,
-      "pages": 120,
-      "isbn": "978-967-61-2203-5",
-      "rumusan": "Kisah perjuangan tokoh-tokoh wanita sejarah Melayu seperti Tun Fatimah dalam mempertahankan kedaulatan tanah air daripada penjajah.",
-      "lesson": "Semangat patriotisme dan cinta akan tanah air perlu dipupuk sejak kecil."
-    },
-    {
-      "id": "loc-fik-bm-000004",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "bm",
-      "title": "Impian Mimi Memiliki Bola Sepak",
-      "author": "Aina Farhana",
-      "publisher": "Cerdik Publications",
-      "year": 2019,
-      "pages": 32,
-      "isbn": "978-967-000-004-6",
-      "rumusan": "Mimi sangat mengimpikan untuk mempunyai bola sepak sendiri. Melalui bimbingan bapanya, dia mula menabung wang saku sehinggalah impiannya tercapai.",
-      "lesson": "Sikap sabar, berjimat cermat dan gigih berusaha adalah kunci kejayaan."
-    },
-    {
-      "id": "loc-fik-bm-000005",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "bm",
-      "title": "Sang Katak Penjaga Kampung Sentosa",
-      "author": "Khairul Anuar",
-      "publisher": "Pelangi Sdn. Bhd.",
-      "year": 2022,
-      "pages": 28,
-      "isbn": "978-967-444-005-7",
-      "rumusan": "Kisah seekor katak yang rajin dan sentiasa menjaga keselamatan penduduk kampung daripada ancaman ular yang jahat.",
-      "lesson": "Nilai tanggungjawab dan sikap tolong-menolong membawa keamanan bersama."
-    },
-    {
-      "id": "loc-fik-bm-000006",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "bm",
-      "title": "Pertandingan Bakat di Tasik Indah",
-      "author": "Khairul Anuar",
-      "publisher": "Pelangi Sdn. Bhd.",
-      "year": 2021,
-      "pages": 36,
-      "isbn": "978-967-444-006-4",
-      "rumusan": "Haiwan-haiwan di Tasik Indah mengadakan pertandingan bakat untuk merayakan ulang tahun hutan, memperlihatkan keunikan masing-masing.",
-      "lesson": "Kita perlu menghargai bakat dan kebolehan yang ada pada setiap individu."
-    },
-    {
-      "id": "loc-fik-bm-000007",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "bm",
-      "title": "Sahabat Rimba",
-      "author": "Johari Latif",
-      "publisher": "Dewan Bahasa dan Pustaka",
-      "year": 2017,
-      "pages": 45,
-      "isbn": "978-983-49-1107-2",
-      "rumusan": "Kisah persahabatan antara Sang Rusa dan Sang Burung yang saling membantu ketika salah seorang daripada mereka terperangkap dalam jerat pemburu.",
-      "lesson": "Sahabat yang sejati akan sentiasa ada untuk membantu pada masa kesusahan."
-    },
-    {
-      "id": "loc-nf-bm-000008",
-      "source": "local",
-      "category": "Bukan Fiksyen",
-      "language": "bm",
-      "title": "Kisah Bintang di Langit",
-      "author": "Halim Said",
-      "publisher": "Sasbadi",
-      "year": 2020,
-      "pages": 50,
-      "isbn": "978-967-340-108-9",
-      "rumusan": "Buku ini menceritakan tentang formasi buruj dan bagaimana pelaut zaman dahulu menggunakan bintang sebagai panduan arah di lautan.",
-      "lesson": "Ilmu pengetahuan tentang alam semesta sangat luas dan berguna bagi manusia."
-    },
-    {
-      "id": "loc-fik-bm-000009",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "bm",
-      "title": "Cita-cita Azri",
-      "author": "Ridzuan Majid",
-      "publisher": "Karisma Publications",
-      "year": 2023,
-      "pages": 64,
-      "isbn": "978-967-150-209-1",
-      "rumusan": "Azri bercita-cita menjadi seorang doktor pakar bedah dan dia belajar dengan tekun walaupun menghadapi kekangan kewangan keluarga.",
-      "lesson": "Kemiskinan bukanlah penghalang untuk mencapai kejayaan jika kita berusaha bersungguh-sungguh."
-    },
-    {
-      "id": "loc-nf-bm-000010",
-      "source": "local",
-      "category": "Bukan Fiksyen",
-      "language": "bm",
-      "title": "Khazanah Hutan Tropika",
-      "author": "Dr. Rosli Omar",
-      "publisher": "Institut Penyelidikan Perhutanan",
-      "year": 2019,
-      "pages": 95,
-      "isbn": "978-967-522-210-4",
-      "rumusan": "Buku bukan fiksyen ini menerangkan tentang kepelbagaian biologi, flora dan fauna serta kepentingan memelihara hutan hujan tropika negara.",
-      "lesson": "Kita wajib memelihara alam sekitar demi kesejahteraan generasi akan datang."
-    },
-    // === 10 English Books ===
-    {
-      "id": "loc-fik-en-000011",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "en",
-      "title": "The Brave Little Squirrel",
-      "author": "Emily Carter",
-      "publisher": "Ladybird Books",
-      "year": 2018,
-      "pages": 32,
-      "isbn": "978-0-241-02001-2",
-      "rumusan": "Sammy the squirrel overcomes his fear of heights to rescue his younger sister who is stuck on a high branch during a heavy storm.",
-      "lesson": "True bravery is helping others even when we are feeling scared inside."
-    },
-    {
-      "id": "loc-fik-en-000012",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "en",
-      "title": "The Hidden Treasure of Oak Island",
-      "author": "Robert Vance",
-      "publisher": "Scholastic",
-      "year": 2021,
-      "pages": 110,
-      "isbn": "978-0-545-03002-9",
-      "rumusan": "Three school friends spend their summer holiday solving a series of cryptic riddles that lead them to a historical treasure site.",
-      "lesson": "Teamwork, persistence, and critical thinking can solve the most difficult challenges."
-    },
-    {
-      "id": "loc-nf-en-000013",
-      "source": "local",
-      "category": "Bukan Fiksyen",
-      "language": "en",
-      "title": "A Journey to the Stars",
-      "author": "Dr. Alan Spacey",
-      "publisher": "National Geographic Kids",
-      "year": 2020,
-      "pages": 80,
-      "isbn": "978-1-426-04003-6",
-      "rumusan": "A colorful guide explaining the solar system, planets, galaxies, and how astronauts live and work aboard the International Space Station.",
-      "lesson": "Curiosity about science and technology drives human progress and exploration."
-    },
-    {
-      "id": "loc-fik-en-000014",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "en",
-      "title": "The Boy Who Painted the Wind",
-      "author": "Thomas Miller",
-      "publisher": "HarperCollins",
-      "year": 2017,
-      "pages": 45,
-      "isbn": "978-0-062-05004-3",
-      "rumusan": "An inspiring story of a young boy in a small village who uses his artistic talents to bring joy and color to his community.",
-      "lesson": "Art and creativity have the power to transform lives and unite people."
-    },
-    {
-      "id": "loc-fik-en-000015",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "en",
-      "title": "The Magic Paintbrush",
-      "author": "Traditional Tales",
-      "publisher": "Oxford University Press",
-      "year": 2019,
-      "pages": 24,
-      "isbn": "978-0-198-06005-0",
-      "rumusan": "Ma Liang is given a magic paintbrush that makes anything he draws come to life, which he uses to help the poor villagers.",
-      "lesson": "We should use our talents and resources to help those who are in need."
-    },
-    {
-      "id": "loc-nf-en-000016",
-      "source": "local",
-      "category": "Bukan Fiksyen",
-      "language": "en",
-      "title": "Save Our Oceans",
-      "author": "Sarah Jenkins",
-      "publisher": "Green Earth Books",
-      "year": 2022,
-      "pages": 72,
-      "isbn": "978-1-912-07006-7",
-      "rumusan": "An educational book detailing the impact of plastic pollution on marine animals and offering practical ways kids can reduce plastic waste.",
-      "lesson": "Every individual has a responsibility to protect the planet and its ecosystems."
-    },
-    {
-      "id": "loc-fik-en-000017",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "en",
-      "title": "The Secret Garden",
-      "author": "Frances Hodgson Burnett",
-      "publisher": "Puffin Books",
-      "year": 2015,
-      "pages": 250,
-      "isbn": "978-0-141-32107-2",
-      "rumusan": "Mary Lennox, a spoiled young girl, discovers a locked, hidden garden and brings it back to life with the help of her new friends.",
-      "lesson": "Nature and friendship have the power to heal minds and bring happiness."
-    },
-    {
-      "id": "loc-fik-en-000018",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "en",
-      "title": "The Smartest Owl",
-      "author": "Rebecca West",
-      "publisher": "Macmillan",
-      "year": 2020,
-      "pages": 36,
-      "isbn": "978-0-330-08008-9",
-      "rumusan": "Oliver the owl teaches his young forest friends how to read maps and find food safely during the cold winter season.",
-      "lesson": "Sharing knowledge and guidance helps the entire community survive and grow."
-    },
-    {
-      "id": "loc-fik-en-000019",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "en",
-      "title": "Champions of the Field",
-      "author": "David Beckham",
-      "publisher": "Hodder Children's Books",
-      "year": 2023,
-      "pages": 140,
-      "isbn": "978-1-444-09009-6",
-      "rumusan": "A story of a young, underdog school football team training hard to win the state championship cup against all odds.",
-      "lesson": "Discipline, hard work, and unity are essential for achieving sports success."
-    },
-    {
-      "id": "loc-nf-en-000020",
-      "source": "local",
-      "category": "Bukan Fiksyen",
-      "language": "en",
-      "title": "The Story of Computers",
-      "author": "Kevin Techy",
-      "publisher": "Usborne",
-      "year": 2021,
-      "pages": 64,
-      "isbn": "978-1-474-90010-2",
-      "rumusan": "A beginner-friendly history of computer technology, from the ancient abacus to modern smartphones and artificial intelligence.",
-      "lesson": "Technological innovation shapes the way we communicate, learn and live."
-    },
-    // === 10 Chinese Books ===
-    {
-      "id": "loc-fik-zh-000021",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "zh",
-      "title": "神笔马良",
-      "author": "洪汛涛",
-      "publisher": "少年儿童出版社",
-      "year": 2018,
-      "pages": 30,
-      "isbn": "978-7-5324-0001-7",
-      "rumusan": "善良的马良得到了一支神笔，画什么都会变成真的。他用神笔帮助穷苦百姓画农具，并惩罚了贪婪的皇帝。",
-      "lesson": "善良与智慧能够战胜贪婪，我们要用自己的本领去帮助需要的人。"
-    },
-    {
-      "id": "loc-fik-zh-000022",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "zh",
-      "title": "快乐的蒲公英",
-      "author": "张秋生",
-      "publisher": "接力出版社",
-      "year": 2020,
-      "pages": 40,
-      "isbn": "978-7-5448-0002-4",
-      "rumusan": "小蒲公英跟着风儿旅行，把种子播撒到大地的各个角落，给干枯的荒野带来了勃勃生机与快乐。",
-      "lesson": "传播希望与爱心是快乐的源泉，生命因奉献而精彩。"
-    },
-    {
-      "id": "loc-fik-zh-000023",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "zh",
-      "title": "小溪流的歌",
-      "author": "严文井",
-      "publisher": "人民文学出版社",
-      "year": 2017,
-      "pages": 48,
-      "isbn": "978-7-0201-0003-1",
-      "rumusan": "小溪流永不停息地向前奔流，穿过森林和山谷，汇入大河，最终流进大海，一路上唱着欢快的歌。",
-      "lesson": "人生应当像小溪流一样，坚持不懈，勇往直前，永不停步。"
-    },
-    {
-      "id": "loc-fik-zh-000024",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "zh",
-      "title": "树叶的旅行",
-      "author": "林颂育",
-      "publisher": "明天出版社",
-      "year": 2019,
-      "pages": 35,
-      "isbn": "978-7-5332-0004-8",
-      "rumusan": "一片小树叶在秋天告别了树妈妈，跟着风儿去旅行。它落入小河，当了蚂蚁的渡船，最后化作肥料守护大树。",
-      "lesson": "生命的每个阶段都有其独特的价值，我们要乐于助人并感恩生命。"
-    },
-    {
-      "id": "loc-nf-zh-000025",
-      "source": "local",
-      "category": "Bukan Fiksyen",
-      "language": "zh",
-      "title": "垃圾分类大作战",
-      "author": "王小明",
-      "publisher": "中国环境出版社",
-      "year": 2022,
-      "pages": 50,
-      "isbn": "978-7-5115-0005-5",
-      "rumusan": "本书用有趣的插图和故事，向小朋友详细介绍了可回收垃圾、厨余垃圾等分类知识以及环保的重要性。",
-      "lesson": "保护环境，人人有责，我们要从垃圾分类的日常小事做起。"
-    },
-    {
-      "id": "loc-fik-zh-000026",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "zh",
-      "title": "寻找时间的男孩",
-      "author": "李华",
-      "publisher": "二十一世纪出版社",
-      "year": 2021,
-      "pages": 96,
-      "isbn": "978-7-5391-0006-2",
-      "rumusan": "一个经常拖延时间的小男孩，在梦境中经历了一次寻找丢失时间的奇幻旅行，终于明白了时间的宝贵。",
-      "lesson": "一寸光阴一寸金，我们要学会珍惜时间，改掉拖延的坏习惯。"
-    },
-    {
-      "id": "loc-fik-zh-000027",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "zh",
-      "title": "团结的蚂蚁一家",
-      "author": "童话大王",
-      "publisher": "福建少年儿童出版社",
-      "year": 2020,
-      "pages": 28,
-      "isbn": "978-7-5395-0007-9",
-      "rumusan": "面对突如其来的洪水威胁，成千上万只蚂蚁紧紧抱成一个大球，顺水漂流，最终成功脱险。",
-      "lesson": "团结就是力量，大家同心协力才能战胜巨大的困难。"
-    },
-    {
-      "id": "loc-nf-zh-000028",
-      "source": "local",
-      "category": "Bukan Fiksyen",
-      "language": "zh",
-      "title": "宇宙的奥秘",
-      "author": "科普研究会",
-      "publisher": "科学普及出版社",
-      "year": 2021,
-      "pages": 88,
-      "isbn": "978-7-1100-0008-6",
-      "rumusan": "本书介绍了黑洞、恒星诞生、银河系等天文学基础知识，激发小读者对浩瀚太空进行科学探索的兴趣。",
-      "lesson": "科学探索永无止境，我们要保持对未知世界的好奇心。"
-    },
-    {
-      "id": "loc-fik-zh-000029",
-      "source": "local",
-      "category": "Fiksyen",
-      "language": "zh",
-      "title": "爷爷的竹编手艺",
-      "author": "刘美",
-      "publisher": "四川少年儿童出版社",
-      "year": 2023,
-      "pages": 60,
-      "isbn": "978-7-5408-0009-3",
-      "rumusan": "讲述了主人公跟着爷爷学习中国传统民间手艺——竹编的故事，展现了手艺人的匠心精神与传统文化魅力。",
-      "lesson": "传承优秀的中华传统手艺与文化使我们深感自豪。"
-    },
-    {
-      "id": "loc-nf-zh-000030",
-      "source": "local",
-      "category": "Bukan Fiksyen",
-      "language": "zh",
-      "title": "计算机的发展史",
-      "author": "赵科技",
-      "publisher": "电子工业出版社",
-      "year": 2022,
-      "pages": 75,
-      "isbn": "978-7-1210-0010-9",
-      "rumusan": "本书生动讲述了计算机从大型机到个人电脑、互联网以及当今人工智能的演变历史与工作原理。",
-      "lesson": "科技创新正在深刻改变着我们的世界，我们要努力学习现代科学。"
-    }
-  ];
+  // Books will be fetched from cloud API
+  const BOOKS_DATABASE = [];
+
 
   const state = {
     books: BOOKS_DATABASE,
@@ -485,10 +60,6 @@
     collapsed: true,
     studentName: "",
     studentGrade: "",
-    autoResumeSubmit: false,
-    autoResumeRefreshAt: 0,
-    workerSession: "",
-    bookCursors: { bm: 0, en: 0, zh: 0 },
     ...GM_getValue(STORE_KEY, {})
   };
 
@@ -499,8 +70,6 @@
   if (state.studentName === "FAQ") {
     state.studentName = "";
   }
-
-  state.bookCursors = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
 
   let panelReady = false;
 
@@ -521,11 +90,7 @@
       lastSubmitTime: state.lastSubmitTime,
       collapsed: state.collapsed,
       studentName: state.studentName,
-      studentGrade: state.studentGrade,
-      autoResumeSubmit: state.autoResumeSubmit,
-      autoResumeRefreshAt: state.autoResumeRefreshAt,
-      workerSession: state.workerSession,
-      bookCursors: state.bookCursors
+      studentGrade: state.studentGrade
     });
   }
 
@@ -591,27 +156,19 @@
     return "others";
   }
 
-  function submittedTitleSet() {
-    const titles = new Set();
-    for (const title of state.submittedTitles || []) {
-      titles.add(String(title).trim().toLowerCase());
-      titles.add(normalizeTitle(title));
-    }
-    return titles;
-  }
-
-  function submittedIsbnSet() {
-    return new Set((state.submittedIsbns || []).map(cleanIsbn));
-  }
-
   function applyFilters() {
-    const submittedTitlesSet = submittedTitleSet();
-    const submittedIsbnsSet = submittedIsbnSet();
+    const submittedTitlesSet = new Set((state.submittedTitles || []).map(t => String(t).trim().toLowerCase()));
+    const submittedIsbnsSet = new Set((state.submittedIsbns || []).map(i => String(i).replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase()));
 
     state.filtered = state.books.filter((book) => {
       if (state.filters.category !== "all" && book.category !== state.filters.category) return false;
       if (state.filters.language !== "all" && book.language !== state.filters.language) return false;
-      return !isUsedBook(book, submittedTitlesSet, submittedIsbnsSet);
+      
+      const titleLower = String(book.title || "").trim().toLowerCase();
+      const isbnClean = String(book.isbn || "").replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase();
+      // Keep duplicates in the filtered list so they can be rendered with the 🔴 [已读] indicator
+      
+      return true;
     });
 
     if (state.filtered.length > 0 && !state.filtered.some((book) => bookKey(book) === state.selectedKey)) {
@@ -652,160 +209,76 @@
     return "";
   }
 
-  function loadRemoteBooks() {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: "GET",
-        url: `${BOOKS_DATA_URL}?t=${Date.now()}`,
-        headers: { accept: "application/json" },
-        onload: (response) => {
-          try {
-            const books = JSON.parse(response.responseText);
-            if (!Array.isArray(books) || books.length === 0) {
-              reject(new Error("remote book database is empty"));
-              return;
-            }
-            resolve(books);
-          } catch (error) {
-            reject(error);
-          }
-        },
-        onerror: () => reject(new Error("remote book database request failed")),
-        ontimeout: () => reject(new Error("remote book database request timed out"))
-      });
-    });
-  }
-
-  function workerProfile() {
-    return state.userId ? `ains:${state.userId}` : "";
-  }
-
-  function workerRequest(path, body) {
-    if (!WORKER_URL) return Promise.resolve(null);
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: body ? "POST" : "GET",
-        url: `${WORKER_URL}${path}`,
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-          ...(WORKER_TOKEN ? { "X-API-Token": WORKER_TOKEN } : {})
-        },
-        data: body ? JSON.stringify(body) : undefined,
-        onload: (response) => {
-          try {
-            const data = JSON.parse(response.responseText || "{}");
-            if (response.status >= 400) reject(new Error(data.error || `worker HTTP ${response.status}`));
-            else resolve(data);
-          } catch (error) {
-            reject(error);
-          }
-        },
-        onerror: () => reject(new Error("worker request failed")),
-        ontimeout: () => reject(new Error("worker request timed out"))
-      });
-    });
-  }
-
-  async function syncWorkerCursor() {
-    const profile = workerProfile();
-    if (!profile) return;
-    try {
-      const data = await workerRequest(`/session?profile=${encodeURIComponent(profile)}`);
-      if (!data) return;
-      state.workerSession = data.currentSession || state.workerSession;
-      const remote = { bm: 0, en: 0, zh: 0, ...(data.bookCursors || {}) };
-      const local = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
-      const merged = {
-        bm: Math.max(Number(local.bm || 0), Number(remote.bm || 0)),
-        en: Math.max(Number(local.en || 0), Number(remote.en || 0)),
-        zh: Math.max(Number(local.zh || 0), Number(remote.zh || 0))
-      };
-      state.bookCursors = {
-        bm: merged.bm,
-        en: merged.en,
-        zh: merged.zh
-      };
-      saveState();
-      if (merged.bm > remote.bm || merged.en > remote.en || merged.zh > remote.zh) {
-        await workerRequest("/cursor", { profile, session: state.workerSession, bookCursors: merged });
-      }
-    } catch (error) {
-      console.warn("NILAM API Assistant: worker cursor sync failed", error);
-    }
-  }
-
-  async function advanceBookCursor(language) {
-    const lang = ["bm", "en", "zh"].includes(language) ? language : "bm";
-    state.bookCursors = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
-    state.bookCursors[lang] = Number(state.bookCursors[lang] || 0) + 1;
-    saveState();
-
-    const profile = workerProfile();
-    if (!profile || !state.workerSession) return;
-    try {
-      const data = await workerRequest("/advance", { profile, lang, session: state.workerSession });
-      if (data?.bookCursors) {
-        state.workerSession = data.currentSession || state.workerSession;
-        const remote = { bm: 0, en: 0, zh: 0, ...data.bookCursors };
-        const local = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
-        state.bookCursors = {
-          bm: Math.max(Number(local.bm || 0), Number(remote.bm || 0)),
-          en: Math.max(Number(local.en || 0), Number(remote.en || 0)),
-          zh: Math.max(Number(local.zh || 0), Number(remote.zh || 0))
-        };
-        saveState();
-      }
-    } catch (error) {
-      console.warn("NILAM API Assistant: worker cursor advance failed", error);
-    }
-  }
-
   function cleanIsbn(isbn) {
     return String(isbn || "").replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase();
   }
 
-  function normalizeTitle(title) {
-    return String(title || "")
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}]+/gu, " ")
-      .trim()
-      .replace(/\s+/g, " ");
+  function fetchNextBooks() {
+    return new Promise((resolve, reject) => {
+      const usedTitles = Array.from(new Set((state.submittedTitles || []).map(t => String(t).trim().toLowerCase())));
+      const usedIsbns = Array.from(new Set((state.submittedIsbns || []).map(cleanIsbn)));
+      
+      const payload = {
+        userId: String(state.userId || "unknown"),
+        usedTitles: usedTitles,
+        usedIsbns: usedIsbns,
+        counts: { zh: 10, bm: 10, en: 10 }
+      };
+
+      GM_xmlhttpRequest({
+        method: "POST",
+        url: `${API_BASE_URL}/api/books/next`,
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${API_TOKEN}`
+        },
+        data: JSON.stringify(payload),
+        onload: (response) => {
+          try {
+            if (response.status >= 400) {
+              reject(new Error(`API Error ${response.status}: ${response.responseText}`));
+              return;
+            }
+            const data = JSON.parse(response.responseText);
+            if (!data || !data.books || data.books.length === 0) {
+              reject(new Error("no books returned from server"));
+              return;
+            }
+            resolve(data.books);
+          } catch (error) {
+            reject(error);
+          }
+        },
+        onerror: () => reject(new Error("API request failed")),
+        ontimeout: () => reject(new Error("API request timed out"))
+      });
+    });
   }
 
-  function isUsedBook(book, usedTitles, usedIsbns, oldKeys = new Set()) {
-    const titleLower = String(book?.title || "").trim().toLowerCase();
-    const titleNormalized = normalizeTitle(book?.title);
-    const isbnClean = cleanIsbn(book?.isbn);
-    return oldKeys.has(bookKey(book)) || usedTitles.has(titleLower) || usedTitles.has(titleNormalized) || (isbnClean && usedIsbns.has(isbnClean));
+  function advanceCursor(language) {
+    if (!state.userId) return;
+    GM_xmlhttpRequest({
+      method: "POST",
+      url: `${API_BASE_URL}/api/books/advance`,
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_TOKEN}`
+      },
+      data: JSON.stringify({ userId: String(state.userId), language: language })
+    });
   }
 
-  function cursorBookBatch(remoteBooks) {
-    const usedTitles = submittedTitleSet();
-    const usedIsbns = submittedIsbnSet();
-    const pickedKeys = new Set();
-    const batch = [];
-    const cursors = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
-
-    for (const language of Object.keys(LANGUAGE_BATCH_COUNTS)) {
-      const pool = remoteBooks.filter((book) => book.language === language);
-      if (!pool.length) continue;
-
-      let scanned = 0;
-      let index = Number(cursors[language] || 0) % pool.length;
-      while (scanned < pool.length && batch.filter((book) => book.language === language).length < LANGUAGE_BATCH_COUNTS[language]) {
-        const book = pool[index];
-        const key = bookKey(book);
-        if (!pickedKeys.has(key) && !isUsedBook(book, usedTitles, usedIsbns)) {
-          pickedKeys.add(key);
-          batch.push(book);
-        }
-        index = (index + 1) % pool.length;
-        scanned += 1;
-      }
-    }
-
-    return batch;
+  function rejectDuplicate(bookId, language) {
+    if (!state.userId) return;
+    GM_xmlhttpRequest({
+      method: "POST",
+      url: `${API_BASE_URL}/api/books/reject`,
+      headers: { 
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_TOKEN}`
+      },
+      data: JSON.stringify({ userId: String(state.userId), bookId: bookId, reason: "duplicate", language: language })
+    });
   }
 
   function looksLikeNilamPost(url, bodyText) {
@@ -859,10 +332,7 @@
             state.totalHistoryCount = 0;
             state.dashboardRecordCount = 0;
             state.todaySubmitCount = 0;
-            stopAutoSubmit(`检测到账号切换：${previousUserId} -> ${state.userId}。正在同步历史记录。`, { keepResume: state.autoResumeSubmit });
-            setTimeout(() => {
-              if (state.apiTemplate && tokenStatus().ok) fetchHistory(true);
-            }, 0);
+            setStatus(`检测到账号切换：${previousUserId} -> ${state.userId}。请同步历史记录。`);
           }
           console.log("NILAM API Assistant: Synced User ID ->", state.userId);
         }
@@ -873,22 +343,9 @@
       if (state.apiTemplate) {
         state.apiTemplate.headers["authorization"] = authHeader;
         console.log("NILAM API Assistant: Automatically updated Bearer Token in background.");
-      } else {
-        state.apiTemplate = {
-          url: "https://ains-api.moe.gov.my/api/nilam-records",
-          headers: { "authorization": authHeader, "content-type": "application/json" },
-          bodyText: "",
-          payload: null,
-          capturedAt: new Date().toISOString()
-        };
-        console.log("NILAM API Assistant: Auto-constructed apiTemplate from Bearer token.");
-        if (panelReady) setStatus("API 凭证自动捕获成功。可以开始提交。");
-        setTimeout(() => { if (state.userId) fetchHistory(); }, 500);
       }
       saveState();
       renderApiStatus();
-      syncWorkerCursor();
-      resumeAutoSubmitIfReady();
     }
   }
 
@@ -1018,14 +475,6 @@
       : `${result.message}${result.key ? ` | body=${result.bodyValue} provider=${result.providerValue}` : ""}`;
   }
 
-  function normalizeTitle(title) {
-    return String(title || "")
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}]+/gu, " ")
-      .trim()
-      .replace(/\s+/g, " ");
-  }
-
   function extractTitlesAndIsbnsFromJson(obj, titleSet = new Set(), isbnSet = new Set()) {
     if (!obj || typeof obj !== "object") return;
     if (Array.isArray(obj)) {
@@ -1067,11 +516,11 @@
       const dateVal = obj.date || obj.attributes?.date;
 
       // Fallback through all typical creation date keys
-      const createdVal = obj.createdAt || obj.attributes?.createdAt ||
-        obj.created_at || obj.attributes?.created_at ||
-        obj.publishedAt || obj.attributes?.publishedAt ||
-        obj.published_at || obj.attributes?.published_at ||
-        obj.updatedAt || obj.attributes?.updatedAt;
+      const createdVal = obj.createdAt || obj.attributes?.createdAt || 
+                         obj.created_at || obj.attributes?.created_at ||
+                         obj.publishedAt || obj.attributes?.publishedAt ||
+                         obj.published_at || obj.attributes?.published_at ||
+                         obj.updatedAt || obj.attributes?.updatedAt;
 
       if (dateVal || createdVal) {
         if (dateVal === todayStr) {
@@ -1192,7 +641,7 @@
           console.log("NILAM API Assistant: Direct synced counter response ->", counterData);
           const count = extractTodayCountFromCounter(counterData);
           if (count !== null) {
-            state.todaySubmitCount = Math.max(state.todaySubmitCount || 0, count);
+            state.todaySubmitCount = count;
             saveState();
           }
         }
@@ -1205,7 +654,6 @@
 
       setStatus(`成功同步历史记录，共 ${state.totalHistoryCount} 条数据，去重已读 ${state.submittedTitles.length} 本。`);
       if (renderAfter) {
-        applyFilters();
         renderApiStatus();
         renderBookSelect();
       }
@@ -1247,14 +695,16 @@
   }
 
   function isCurrentBookDuplicate() {
-    return isUsedBook(currentBook(), submittedTitleSet(), submittedIsbnSet());
-  }
+    const book = currentBook();
+    if (!book) return false;
 
-  function skipUsedBookSelection() {
-    const before = state.selectedKey;
-    applyFilters();
-    renderBookSelect();
-    return state.selectedKey && state.selectedKey !== before;
+    const titleLower = String(book.title || "").trim().toLowerCase();
+    const isbnClean = String(book.isbn || "").replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase();
+
+    const submittedTitlesSet = new Set((state.submittedTitles || []).map(t => String(t).trim().toLowerCase()));
+    const submittedIsbnsSet = new Set((state.submittedIsbns || []).map(i => String(i).replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase()));
+
+    return submittedTitlesSet.has(titleLower) || (isbnClean && submittedIsbnsSet.has(isbnClean));
   }
 
   function patchFetch() {
@@ -1315,7 +765,6 @@
 
             saveState();
             console.log("NILAM API Assistant: Intercepted and synced records ->", state.submittedTitles.length, "total ->", state.totalHistoryCount, "today ->", state.todaySubmitCount);
-            applyFilters();
             renderApiStatus();
             renderBookSelect();
           } catch (e) {
@@ -1330,7 +779,7 @@
             console.log("NILAM API Assistant: Intercepted info/counter response ->", data);
             const count = extractTodayCountFromCounter(data);
             if (count !== null) {
-              state.todaySubmitCount = Math.max(state.todaySubmitCount || 0, count);
+              state.todaySubmitCount = count;
               saveState();
               renderApiStatus();
             }
@@ -1394,7 +843,6 @@
 
               saveState();
               console.log("NILAM API Assistant: Intercepted and synced XHR records ->", state.submittedTitles.length, "total ->", state.totalHistoryCount, "today ->", state.todaySubmitCount);
-              applyFilters();
               renderApiStatus();
               renderBookSelect();
             } catch (e) {
@@ -1408,7 +856,7 @@
               console.log("NILAM API Assistant: Intercepted XHR info/counter response ->", data);
               const count = extractTodayCountFromCounter(data);
               if (count !== null) {
-                state.todaySubmitCount = Math.max(state.todaySubmitCount || 0, count);
+                state.todaySubmitCount = count;
                 saveState();
                 renderApiStatus();
               }
@@ -1440,20 +888,7 @@
     const todayCount = state.todaySubmitCount || 0;
     if (todayCount >= 30) {
       setStatus("拦截：今日提交已达安全上限（30本），防止封号风险！");
-      return "daily_limit";
-    }
-
-    const rawBook = currentBook();
-    const book = bookForApi(rawBook);
-    if (!book) {
-      setStatus("请先选择一本图书。");
-      return "no_book";
-    }
-    if (isCurrentBookDuplicate()) {
-      await advanceBookCursor(rawBook?.language);
-      const skipped = skipUsedBookSelection();
-      setStatus(skipped ? "已跳过已读书本，改选下一本未读书。" : "提交拦截：该书已被阅读，当前列表没有未读书。请刷新题库。");
-      return skipped ? "duplicate_skipped" : "duplicate_blocked";
+      return;
     }
 
     if (state.lastSubmitTime) {
@@ -1461,21 +896,32 @@
       if (elapsed < 10000) {
         const remaining = Math.ceil((10000 - elapsed) / 1000);
         setStatus(`冷却拦截：为了模拟真人录入，请等待 ${remaining} 秒冷却时间。`);
-        return "cooldown";
+        return;
       }
+    }
+
+    const book = bookForApi(currentBook());
+    if (!book) {
+      setStatus("请先选择一本图书。");
+      return;
+    }
+    if (isCurrentBookDuplicate()) {
+      setStatus("提交拦截：该书已被阅读，已通知云端跳过。");
+      rejectDuplicate(book.id, book.language);
+      return;
     }
     if (!state.apiTemplate) {
       setStatus("未捕获凭证：请先在 AINS 网页上手动提交一次 NILAM 以捕获 API 凭证。");
-      return "missing_template";
+      return;
     }
-    if (!ensureUsableToken("提交")) return "missing_token";
+    if (!ensureUsableToken("提交")) return;
 
     if (!state.userId) {
       let auth = state.apiTemplate.headers["Authorization"] || state.apiTemplate.headers["authorization"];
       updateCapturedToken(auth);
       if (!state.userId) {
         setStatus("用户 ID 缺失。请尝试重新登录。");
-        return "missing_user";
+        return;
       }
     }
 
@@ -1486,7 +932,7 @@
       setDiagnostics(preflight);
       if (!preflight.ok) {
         setStatus(`提交拦截：本地预校验未通过 (${preflight.message})`);
-        return "preflight_blocked";
+        return;
       }
 
       const headers = {
@@ -1509,8 +955,6 @@
         state.tokenExpiresAt = 0;
         saveState();
         renderApiStatus();
-        setStatus("提交返回 401，登录凭证已过期。");
-        return "missing_token";
       }
       if (!response.ok) {
         console.error("NILAM API Assistant: Response Error Detail ->", text);
@@ -1519,6 +963,9 @@
       }
 
       setStatus(`提交成功：${book.title}`);
+      
+      // Advance cloud cursor
+      advanceCursor(book.language);
 
       // Update local submitted titles and ISBNs array immediately to avoid reloading requirement
       const newTitles = new Set(state.submittedTitles || []);
@@ -1535,7 +982,6 @@
       state.totalHistoryCount = (state.totalHistoryCount || 0) + 1;
       state.dashboardRecordCount = (state.dashboardRecordCount || 0) + 1;
       state.lastSubmitTime = Date.now();
-      await advanceBookCursor(book.language);
 
       // Update AINS dashboard DOM directly without refresh
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
@@ -1544,8 +990,8 @@
         const text = node.nodeValue;
         const prevCount = String(state.dashboardRecordCount - 1);
         if (text.includes(prevCount) && node.parentElement && node.parentElement.innerText && node.parentElement.innerText.includes("Rekod")) {
-          node.nodeValue = text.replace(prevCount, String(state.dashboardRecordCount));
-          break;
+           node.nodeValue = text.replace(prevCount, String(state.dashboardRecordCount));
+           break;
         }
       }
 
@@ -1557,8 +1003,17 @@
 
       const currentIndex = state.filtered.findIndex((b) => bookKey(b) === state.selectedKey);
       let isLastBook = false;
-      if (currentIndex !== -1 && currentIndex < state.filtered.length - 1) {
-        state.selectedKey = bookKey(state.filtered[currentIndex + 1]);
+      // Advance to the next unread book
+      let foundNext = false;
+      for (let i = currentIndex + 1; i < state.filtered.length; i++) {
+        state.selectedKey = bookKey(state.filtered[i]);
+        if (!isCurrentBookDuplicate()) {
+          foundNext = true;
+          break;
+        }
+      }
+      
+      if (foundNext) {
         saveState();
         renderBookSelect();
       } else {
@@ -1568,14 +1023,12 @@
 
       // Automatically fetch updated history and refresh book list if needed
       fetchHistory(true).then(() => {
-        if (isLastBook) {
-          refreshBooks(); // Automatically load new books when exhausted
-        }
+         if (isLastBook) {
+           refreshBooks(); // Automatically load new books when exhausted
+         }
       }).catch(err => console.error("Auto-sync failed:", err));
-      return "submitted";
     } catch (error) {
       setStatus(`提交失败：${error.message}`);
-      return "error";
     }
   }
 
@@ -1633,7 +1086,7 @@
     if (!submitBtn) return;
 
     if (isCurrentBookDuplicate()) {
-      return;
+      return; 
     }
 
     if (!state.lastSubmitTime) {
@@ -1726,7 +1179,7 @@
   }
 
   async function refreshBooks() {
-    setStatus("Refreshing unused books...");
+    setStatus("Refreshing unused books from cloud...");
     try {
       if (state.apiTemplate && state.userId && tokenStatus().ok) {
         await fetchHistory(false);
@@ -1734,11 +1187,9 @@
         throw new Error("sync history first so used books can be excluded");
       }
 
-      await syncWorkerCursor();
-      const remoteBooks = await loadRemoteBooks();
-      const batch = cursorBookBatch(remoteBooks);
+      const batch = await fetchNextBooks();
       if (batch.length === 0) {
-        throw new Error("no unused remote books available");
+        throw new Error("no unused books available from cloud API");
       }
 
       state.books = batch;
@@ -1748,7 +1199,7 @@
       renderFilterControls();
       renderBookSelect();
       renderApiStatus();
-      setStatus(`Loaded ${state.books.length} cursor books (ZH/BM/EN).`);
+      setStatus(`Loaded ${state.books.length} unused books.`);
     } catch (error) {
       setStatus(`Refresh unused books failed: ${error.message}`);
     }
@@ -1906,60 +1357,19 @@
 
   let autoSubmitTimer = null;
 
-  function stopAutoSubmit(message, options = {}) {
-    const btn = document.querySelector("#nia-auto-submit");
-    if (autoSubmitTimer) clearInterval(autoSubmitTimer);
-    autoSubmitTimer = null;
-    if (!options.keepResume) {
-      state.autoResumeSubmit = false;
-      saveState();
-    }
-    if (btn) {
-      btn.textContent = "🚀 自动提交 (1分钟/次)";
-      btn.classList.remove("nia-submit");
-      btn.classList.add("nia-secondary");
-    }
-    if (message) setStatus(message);
-  }
-
-  function refreshAinsAndResume(message) {
-    state.autoResumeSubmit = true;
-    state.autoResumeRefreshAt = Date.now();
-    saveState();
-    stopAutoSubmit(message || "正在刷新 AINS，稍后自动恢复自动提交。", { keepResume: true });
-    setTimeout(() => window.location.reload(), 1200);
-  }
-
-  function resumeAutoSubmitIfReady() {
-    if (!state.autoResumeSubmit || autoSubmitTimer) return;
-    if ((state.todaySubmitCount || 0) >= 30) {
-      stopAutoSubmit("今日额度已满，自动恢复已取消。");
-      return;
-    }
-    if (!state.apiTemplate || !state.userId) {
-      setStatus("等待 AINS 捕获登录凭证后自动恢复提交。");
-      return;
-    }
-    if (!tokenStatus().ok) {
-      setStatus("AINS 已刷新，正在等待新的登录凭证。");
-      return;
-    }
-    setStatus("凭证已恢复，继续自动提交。");
-    toggleAutoSubmit();
-  }
-
   function toggleAutoSubmit() {
     const btn = document.querySelector("#nia-auto-submit");
     if (!btn) return;
-
+    
     if (autoSubmitTimer) {
-      stopAutoSubmit("自动提交已停止。");
+      clearInterval(autoSubmitTimer);
+      autoSubmitTimer = null;
+      btn.textContent = "🚀 自动提交 (1分钟/次)";
+      btn.classList.remove("nia-submit");
+      btn.classList.add("nia-secondary");
+      setStatus("自动提交已停止。");
     } else {
-      const status = tokenStatus();
-      if (!status.ok) {
-        refreshAinsAndResume(`自动提交需要有效凭证（${status.label}），正在刷新 AINS 后恢复。`);
-        return;
-      }
+      if (!ensureUsableToken("自动提交")) return;
       if ((state.todaySubmitCount || 0) >= 30) {
         setStatus("今日额度已满，无法开启自动提交。");
         return;
@@ -1967,79 +1377,64 @@
       btn.textContent = "🛑 停止自动提交 (运行中...)";
       btn.classList.remove("nia-secondary");
       btn.classList.add("nia-submit");
-      state.autoResumeSubmit = true;
-      saveState();
       setStatus("已开启自动提交。正在执行...");
 
       const executeAutoSubmit = async () => {
+        // Skip duplicate books automatically
+        if (isCurrentBookDuplicate()) {
+          const currentIndex = state.filtered.findIndex((b) => bookKey(b) === state.selectedKey);
+          let foundNext = false;
+          for (let i = currentIndex + 1; i < state.filtered.length; i++) {
+            state.selectedKey = bookKey(state.filtered[i]);
+            if (!isCurrentBookDuplicate()) {
+              foundNext = true;
+              break;
+            }
+          }
+          if (foundNext) {
+            saveState();
+            renderBookSelect();
+          } else {
+            toggleAutoSubmit();
+            setStatus("没有更多未读图书，自动提交已停止。请刷新题库。");
+            return;
+          }
+        }
+
+        const currentBook = document.querySelector("#nia-book")?.value;
+        if (!currentBook) {
+          toggleAutoSubmit();
+          setStatus("没有可用图书，自动提交已停止。请刷新题库。");
+          return;
+        }
         if ((state.todaySubmitCount || 0) >= 30) {
-          stopAutoSubmit("今日额度已满，自动提交已停止。");
-          alert("🎉 NILAM 自动挂机已完成：\n\n今日 30 本提交额度已满，自动挂机已停止。");
+          toggleAutoSubmit();
+          setStatus("今日额度已满，自动提交已停止。");
+          alert("🎉 NILAM 自动挂机已完成：\n\n今日 30 本提交额度已满，为了防止封号风险，自动提交已停止。");
           return;
         }
         if (!state.apiTemplate) {
-          refreshAinsAndResume("API 凭证丢失，正在刷新 AINS，刷新后自动恢复提交。");
+          toggleAutoSubmit();
+          setStatus("API 凭证丢失，自动提交已停止。");
           return;
         }
-        if (!tokenStatus().ok) {
-          refreshAinsAndResume("登录凭证已过期，正在刷新 AINS，刷新后自动恢复提交。");
-          return;
+        await submitApi();
+        if (autoSubmitTimer) {
+          setStatus("自动提交等待中... 下一本书将在 1 分钟后提交。");
         }
-
-        for (let attempts = 0; attempts <= REFRESH_BOOK_COUNT; attempts++) {
-          if (!currentBook()) {
-            await refreshBooks();
-            if (!currentBook()) {
-              stopAutoSubmit("没有可用图书，自动提交已停止。请刷新题库。");
-              alert("NILAM 自动挂机已暂停：\n\n当前题库没有可用未读书，请点击「Refresh Unused Books」或同步记录后再试。");
-              return;
-            }
-          }
-
-          const result = await submitApi();
-          if (result === "duplicate_skipped") {
-            setStatus("自动提交已跳过已读书本，正在尝试下一本。");
-            continue;
-          }
-          if (result === "duplicate_blocked" || result === "no_book") {
-            await refreshBooks();
-            continue;
-          }
-          if (result === "submitted" && autoSubmitTimer) {
-            setStatus("自动提交等待中... 下一本书将在 1 分钟后提交。");
-          }
-          if (["daily_limit", "missing_template", "missing_token", "missing_user", "preflight_blocked", "error"].includes(result)) {
-            const reason = {
-              daily_limit: "今日额度已满",
-              missing_template: "缺少 API 捕获数据",
-              missing_token: "登录凭证已过期",
-              missing_user: "用户 ID 缺失",
-              preflight_blocked: "提交数据预校验失败",
-              error: "提交失败"
-            }[result] || "未知错误";
-            if (result === "missing_template" || result === "missing_token") {
-              refreshAinsAndResume(`自动提交遇到${reason}，正在刷新 AINS 后恢复。`);
-            } else {
-              stopAutoSubmit(`自动提交已停止：${reason}。`);
-            }
-          }
-          return;
-        }
-
-        stopAutoSubmit("自动提交已暂停：连续跳过太多已读书，请同步记录或刷新题库。");
       };
 
-      autoSubmitTimer = setInterval(executeAutoSubmit, 61000);
       executeAutoSubmit();
+      autoSubmitTimer = setInterval(executeAutoSubmit, 61000);
     }
   }
 
   function createPanel() {
     if (document.getElementById(PANEL_ID)) return;
     try {
-      const panel = document.createElement("section");
-      panel.id = PANEL_ID;
-      panel.innerHTML = `
+    const panel = document.createElement("section");
+    panel.id = PANEL_ID;
+    panel.innerHTML = `
       <style>
         #${PANEL_ID} {
           position: fixed;
@@ -2183,80 +1578,80 @@
         <div id="nia-status">正在加载书籍数据库...</div>
       </div>
     `;
-      document.body.append(panel);
+    document.body.append(panel);
 
-      const savedX = localStorage.getItem("nilam_api_panel_x");
-      const savedY = localStorage.getItem("nilam_api_panel_y");
-      const minGap = 10;
-      const panelWidth = 320;
+    const savedX = localStorage.getItem("nilam_api_panel_x");
+    const savedY = localStorage.getItem("nilam_api_panel_y");
+    const minGap = 10;
+    const panelWidth = 320;
 
-      if (savedX && savedY) {
-        let x = parseFloat(savedX);
-        let y = parseFloat(savedY);
-        if (isNaN(x)) x = window.innerWidth - panelWidth - minGap;
-        if (isNaN(y)) y = minGap;
+    if (savedX && savedY) {
+      let x = parseFloat(savedX);
+      let y = parseFloat(savedY);
+      if (isNaN(x)) x = window.innerWidth - panelWidth - minGap;
+      if (isNaN(y)) y = minGap;
 
-        x = Math.max(minGap, Math.min(x, window.innerWidth - panelWidth - minGap));
-        y = Math.max(minGap, Math.min(y, window.innerHeight - 300));
+      x = Math.max(minGap, Math.min(x, window.innerWidth - panelWidth - minGap));
+      y = Math.max(minGap, Math.min(y, window.innerHeight - 300));
 
-        panel.style.left = `${x}px`;
-        panel.style.top = `${y}px`;
-        panel.style.right = "auto";
-        panel.style.bottom = "auto";
-      } else {
-        panel.style.right = `${minGap}px`;
-        panel.style.bottom = `${minGap}px`;
+      panel.style.left = `${x}px`;
+      panel.style.top = `${y}px`;
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+    } else {
+      panel.style.right = `${minGap}px`;
+      panel.style.bottom = `${minGap}px`;
+    }
+
+    initDrag(document.getElementById("nia-drag-header"), panel);
+    adjustPanelToViewport();
+
+    document.querySelector("#nia-category").value = state.filters.category;
+    document.querySelector("#nia-language").value = state.filters.language;
+    document.querySelector("#nia-date").value = normalizeIsoDate(state.selectedDate);
+
+    panel.addEventListener("change", (event) => {
+      if (event.target.id === "nia-date") state.selectedDate = normalizeIsoDate(event.target.value);
+      if (event.target.id === "nia-book") state.selectedKey = event.target.value;
+      if (event.target.id === "nia-category") state.filters.category = event.target.value;
+      if (event.target.id === "nia-language") state.filters.language = event.target.value;
+      applyFilters();
+      renderBookSelect();
+    });
+
+    panel.addEventListener("click", async (event) => {
+      if (event.target.id === "nia-toggle") toggleCollapse();
+      const button = event.target.closest("button");
+      if (!button) return;
+      if (button.id === "nia-date-prev" || button.id === "nia-date-next") {
+        shiftSelectedDate(button.id === "nia-date-next" ? 1 : -1);
       }
-
-      initDrag(document.getElementById("nia-drag-header"), panel);
-      adjustPanelToViewport();
-
-      document.querySelector("#nia-category").value = state.filters.category;
-      document.querySelector("#nia-language").value = state.filters.language;
-      document.querySelector("#nia-date").value = normalizeIsoDate(state.selectedDate);
-
-      panel.addEventListener("change", (event) => {
-        if (event.target.id === "nia-date") state.selectedDate = normalizeIsoDate(event.target.value);
-        if (event.target.id === "nia-book") state.selectedKey = event.target.value;
-        if (event.target.id === "nia-category") state.filters.category = event.target.value;
-        if (event.target.id === "nia-language") state.filters.language = event.target.value;
-        applyFilters();
+      if (button.id === "nia-submit") await submitApi();
+      if (button.id === "nia-auto-submit") toggleAutoSubmit();
+      if (button.id === "nia-refresh-books") await refreshBooks();
+      if (button.id === "nia-replay-api") await replayCapturedApi();
+      if (button.id === "nia-sync-api") await fetchHistory();
+      if (button.id === "nia-clear-api") {
+        if (state.apiTemplate) {
+          delete state.apiTemplate.headers.authorization;
+        }
+        state.userId = null;
+        state.tokenExpiresAt = null;
+        state.submittedTitles = [];
+        state.submittedIsbns = [];
+        state.totalHistoryCount = 0;
+        state.dashboardRecordCount = 0;
+        state.todaySubmitCount = 0;
+        state.lastSubmitTime = null;
+        saveState();
+        renderApiStatus();
         renderBookSelect();
-      });
+        setStatus("登录凭证已清除。请在 AINS 手动操作一次以重新捕获。");
+      }
+    });
 
-      panel.addEventListener("click", async (event) => {
-        if (event.target.id === "nia-toggle") toggleCollapse();
-        const button = event.target.closest("button");
-        if (!button) return;
-        if (button.id === "nia-date-prev" || button.id === "nia-date-next") {
-          shiftSelectedDate(button.id === "nia-date-next" ? 1 : -1);
-        }
-        if (button.id === "nia-submit") await submitApi();
-        if (button.id === "nia-auto-submit") toggleAutoSubmit();
-        if (button.id === "nia-refresh-books") await refreshBooks();
-        if (button.id === "nia-replay-api") await replayCapturedApi();
-        if (button.id === "nia-sync-api") await fetchHistory();
-        if (button.id === "nia-clear-api") {
-          if (state.apiTemplate) {
-            delete state.apiTemplate.headers.authorization;
-          }
-          state.userId = null;
-          state.tokenExpiresAt = null;
-          state.submittedTitles = [];
-          state.submittedIsbns = [];
-          state.totalHistoryCount = 0;
-          state.dashboardRecordCount = 0;
-          state.todaySubmitCount = 0;
-          state.lastSubmitTime = null;
-          saveState();
-          renderApiStatus();
-          renderBookSelect();
-          setStatus("登录凭证已清除。请在 AINS 手动操作一次以重新捕获。");
-        }
-      });
-
-      panelReady = true;
-      renderApiStatus();
+    panelReady = true;
+    renderApiStatus();
     } catch (error) {
       console.error("NILAM API Assistant: createPanel failed", error);
       document.getElementById(PANEL_ID)?.remove();
@@ -2353,7 +1748,6 @@
         scrapeProfileFromPage();
         scrapeDashboardRecordCount();
         renderHeaderProfile();
-        resumeAutoSubmitIfReady();
       }
     }, 1000);
 
@@ -2369,7 +1763,6 @@
         if (state.apiTemplate && state.userId) {
           fetchHistory(); // Sync history on load if credentials exist
         }
-        resumeAutoSubmitIfReady();
       }, 500);
     } catch (error) {
       console.error("NILAM API Assistant: Init failed:", error);
