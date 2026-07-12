@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.7.4
+// @version      0.7.5
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.7.4";
+  const SCRIPT_VERSION = "0.7.5";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
   const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
@@ -1299,9 +1299,13 @@
     if (!obj || typeof obj !== "object") return null;
     
     const target = obj.attributes || obj;
-    const student = extractId(target.student);
+    let student = extractId(target.student);
     const school = extractId(target.school);
     const cls = extractId(target.class) || extractId(target.classes);
+    
+    if (!student && obj.id && school) {
+      student = Number(obj.id);
+    }
     
     if (student && school) {
       return { student, school, class: cls };
