@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.6.1
+// @version      0.6.2
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -20,7 +20,7 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.6.1";
+  const SCRIPT_VERSION = "0.6.2";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
   const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
@@ -1015,6 +1015,35 @@
     el.textContent = result.ok
       ? result.message
       : `${result.message}${result.key ? ` | body=${result.bodyValue} provider=${result.providerValue}` : ""}`;
+  }
+
+  async function exportShareableTemplate() {
+    if (!state.apiTemplate?.bodyText) {
+      setStatus("导出失败：请先用 AINS 原生表单手动提交一笔记录。");
+      return;
+    }
+    const payload = parseJsonOrNull(state.apiTemplate.bodyText);
+    const data = payload?.data && typeof payload.data === "object" ? payload.data : {};
+    const staticData = {};
+    for (const key of ["type", "bookType", "reviewIsVideo", "rating"]) {
+      if (Object.hasOwn(data, key)) staticData[key] = data[key];
+    }
+    const template = JSON.stringify({
+      endpoint: new URL(state.apiTemplate.url).pathname,
+      fields: Object.keys(data).filter(key => key !== "provider").sort(),
+      staticData
+    }, null, 2);
+    const debug = document.querySelector("#nia-debug-template");
+    if (debug) {
+      debug.value = template;
+      debug.closest("details")?.setAttribute("open", "");
+    }
+    try {
+      await navigator.clipboard.writeText(template);
+      setStatus("共享模板已复制：不含 token、Cookie、用户 ID、书名或日期。");
+    } catch (error) {
+      setStatus("共享模板已显示；请手动复制，不含个人凭证。");
+    }
   }
 
   function normalizeTitle(title) {
@@ -2174,6 +2203,7 @@
           <button id="nia-replay-api" type="button" class="nia-btn nia-secondary">单步测试</button>
           <button id="nia-sync-api" type="button" class="nia-btn nia-secondary">同步记录</button>
         </div>
+        <button id="nia-export-template" type="button" class="nia-btn nia-secondary" style="width:100%;margin-top:8px;">导出共享模板</button>
         <button id="nia-auto-submit" type="button" class="nia-btn nia-secondary" style="width:100%;margin-top:8px;">🚀 自动提交 (1分钟/次)</button>
         <button id="nia-clear-api" type="button" class="nia-btn nia-secondary" style="width:100%;margin-top:8px;">清除登录凭证</button>
         <details class="nia-debug-details">
@@ -2237,6 +2267,7 @@
         if (button.id === "nia-refresh-books") await refreshBooks();
         if (button.id === "nia-replay-api") await replayCapturedApi();
         if (button.id === "nia-sync-api") await fetchHistory();
+        if (button.id === "nia-export-template") await exportShareableTemplate();
         if (button.id === "nia-clear-api") {
           if (state.apiTemplate) {
             delete state.apiTemplate.headers.authorization;
