@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         NILAM API Assistant
+// @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
 // @version      0.6.0
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
