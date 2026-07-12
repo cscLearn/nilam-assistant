@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         NILAM API Assistant 0.6
+// @name         NILAM API Assistant
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.6.0
+// @version      0.5.26
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @match        https://ains.moe.gov.my/*
@@ -20,12 +20,9 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.6.0";
+  const SCRIPT_VERSION = "0.5.26";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
-  const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
-  const WORKER_URL = String(GM_getValue("nilam_worker_url", "https://nilam-book.cscflow.com") || localStorage.getItem("nilam_worker_url") || "https://nilam-book.cscflow.com").replace(/\/+$/, "");
-  const WORKER_TOKEN = String(GM_getValue("nilam_worker_token", "sk-nilambooks-fc62df67e2d7d8a9") || localStorage.getItem("nilam_worker_token") || "sk-nilambooks-fc62df67e2d7d8a9").trim();
   const PROVIDER_SECRET = "OypAJ9vA==,OJEpNYuu2h";
   const PROVIDER_ENTRY_ORDER = [
     "user",
@@ -485,10 +482,6 @@
     collapsed: true,
     studentName: "",
     studentGrade: "",
-    autoResumeSubmit: false,
-    autoResumeRefreshAt: 0,
-    workerSession: "",
-    bookCursors: { bm: 0, en: 0, zh: 0 },
     ...GM_getValue(STORE_KEY, {})
   };
 
@@ -499,8 +492,6 @@
   if (state.studentName === "FAQ") {
     state.studentName = "";
   }
-
-  state.bookCursors = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
 
   let panelReady = false;
 
@@ -521,11 +512,7 @@
       lastSubmitTime: state.lastSubmitTime,
       collapsed: state.collapsed,
       studentName: state.studentName,
-      studentGrade: state.studentGrade,
-      autoResumeSubmit: state.autoResumeSubmit,
-      autoResumeRefreshAt: state.autoResumeRefreshAt,
-      workerSession: state.workerSession,
-      bookCursors: state.bookCursors
+      studentGrade: state.studentGrade
     });
   }
 
@@ -591,27 +578,19 @@
     return "others";
   }
 
-  function submittedTitleSet() {
-    const titles = new Set();
-    for (const title of state.submittedTitles || []) {
-      titles.add(String(title).trim().toLowerCase());
-      titles.add(normalizeTitle(title));
-    }
-    return titles;
-  }
-
-  function submittedIsbnSet() {
-    return new Set((state.submittedIsbns || []).map(cleanIsbn));
-  }
-
   function applyFilters() {
-    const submittedTitlesSet = submittedTitleSet();
-    const submittedIsbnsSet = submittedIsbnSet();
+    const submittedTitlesSet = new Set((state.submittedTitles || []).map(t => String(t).trim().toLowerCase()));
+    const submittedIsbnsSet = new Set((state.submittedIsbns || []).map(i => String(i).replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase()));
 
     state.filtered = state.books.filter((book) => {
       if (state.filters.category !== "all" && book.category !== state.filters.category) return false;
       if (state.filters.language !== "all" && book.language !== state.filters.language) return false;
-      return !isUsedBook(book, submittedTitlesSet, submittedIsbnsSet);
+      
+      const titleLower = String(book.title || "").trim().toLowerCase();
+      const isbnClean = String(book.isbn || "").replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase();
+      // Keep duplicates in the filtered list so they can be rendered with the 🔴 [已读] indicator
+      
+      return true;
     });
 
     if (state.filtered.length > 0 && !state.filtered.some((book) => bookKey(book) === state.selectedKey)) {
@@ -676,91 +655,6 @@
     });
   }
 
-  function workerProfile() {
-    return state.userId ? `ains:${state.userId}` : "";
-  }
-
-  function workerRequest(path, body) {
-    if (!WORKER_URL) return Promise.resolve(null);
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: body ? "POST" : "GET",
-        url: `${WORKER_URL}${path}`,
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json",
-          ...(WORKER_TOKEN ? { "X-API-Token": WORKER_TOKEN } : {})
-        },
-        data: body ? JSON.stringify(body) : undefined,
-        onload: (response) => {
-          try {
-            const data = JSON.parse(response.responseText || "{}");
-            if (response.status >= 400) reject(new Error(data.error || `worker HTTP ${response.status}`));
-            else resolve(data);
-          } catch (error) {
-            reject(error);
-          }
-        },
-        onerror: () => reject(new Error("worker request failed")),
-        ontimeout: () => reject(new Error("worker request timed out"))
-      });
-    });
-  }
-
-  async function syncWorkerCursor() {
-    const profile = workerProfile();
-    if (!profile) return;
-    try {
-      const data = await workerRequest(`/session?profile=${encodeURIComponent(profile)}`);
-      if (!data) return;
-      state.workerSession = data.currentSession || state.workerSession;
-      const remote = { bm: 0, en: 0, zh: 0, ...(data.bookCursors || {}) };
-      const local = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
-      const merged = {
-        bm: Math.max(Number(local.bm || 0), Number(remote.bm || 0)),
-        en: Math.max(Number(local.en || 0), Number(remote.en || 0)),
-        zh: Math.max(Number(local.zh || 0), Number(remote.zh || 0))
-      };
-      state.bookCursors = {
-        bm: merged.bm,
-        en: merged.en,
-        zh: merged.zh
-      };
-      saveState();
-      if (merged.bm > remote.bm || merged.en > remote.en || merged.zh > remote.zh) {
-        await workerRequest("/cursor", { profile, session: state.workerSession, bookCursors: merged });
-      }
-    } catch (error) {
-      console.warn("NILAM API Assistant: worker cursor sync failed", error);
-    }
-  }
-
-  async function advanceBookCursor(language) {
-    const lang = ["bm", "en", "zh"].includes(language) ? language : "bm";
-    state.bookCursors = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
-    state.bookCursors[lang] = Number(state.bookCursors[lang] || 0) + 1;
-    saveState();
-
-    const profile = workerProfile();
-    if (!profile || !state.workerSession) return;
-    try {
-      const data = await workerRequest("/advance", { profile, lang, session: state.workerSession });
-      if (data?.bookCursors) {
-        state.workerSession = data.currentSession || state.workerSession;
-        const remote = { bm: 0, en: 0, zh: 0, ...data.bookCursors };
-        const local = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
-        state.bookCursors = {
-          bm: Math.max(Number(local.bm || 0), Number(remote.bm || 0)),
-          en: Math.max(Number(local.en || 0), Number(remote.en || 0)),
-          zh: Math.max(Number(local.zh || 0), Number(remote.zh || 0))
-        };
-        saveState();
-      }
-    } catch (error) {
-      console.warn("NILAM API Assistant: worker cursor advance failed", error);
-    }
-  }
-
   function cleanIsbn(isbn) {
     return String(isbn || "").replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase();
   }
@@ -780,28 +674,47 @@
     return oldKeys.has(bookKey(book)) || usedTitles.has(titleLower) || usedTitles.has(titleNormalized) || (isbnClean && usedIsbns.has(isbnClean));
   }
 
-  function cursorBookBatch(remoteBooks) {
-    const usedTitles = submittedTitleSet();
-    const usedIsbns = submittedIsbnSet();
-    const pickedKeys = new Set();
+  function shuffledSample(items, count) {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy.slice(0, count);
+  }
+
+  function freshUnusedBookBatch(remoteBooks, oldKeys) {
+    const usedTitles = new Set((state.submittedTitles || []).map(t => String(t).trim().toLowerCase()));
+    const usedIsbns = new Set((state.submittedIsbns || []).map(cleanIsbn));
     const batch = [];
-    const cursors = { bm: 0, en: 0, zh: 0, ...(state.bookCursors || {}) };
+    const pickedKeys = new Set();
+    const languages = ["bm", "en", "zh"];
+    const categories = ["Fiksyen", "Bukan Fiksyen"];
 
-    for (const language of Object.keys(LANGUAGE_BATCH_COUNTS)) {
-      const pool = remoteBooks.filter((book) => book.language === language);
-      if (!pool.length) continue;
-
-      let scanned = 0;
-      let index = Number(cursors[language] || 0) % pool.length;
-      while (scanned < pool.length && batch.filter((book) => book.language === language).length < LANGUAGE_BATCH_COUNTS[language]) {
-        const book = pool[index];
-        const key = bookKey(book);
-        if (!pickedKeys.has(key) && !isUsedBook(book, usedTitles, usedIsbns)) {
-          pickedKeys.add(key);
+    for (const language of languages) {
+      for (const category of categories) {
+        const pool = remoteBooks.filter((book) => {
+          const key = bookKey(book);
+          return book.language === language
+            && book.category === category
+            && !pickedKeys.has(key)
+            && !isUsedBook(book, usedTitles, usedIsbns, oldKeys);
+        });
+        for (const book of shuffledSample(pool, 5)) {
+          pickedKeys.add(bookKey(book));
           batch.push(book);
         }
-        index = (index + 1) % pool.length;
-        scanned += 1;
+      }
+    }
+
+    if (batch.length < REFRESH_BOOK_COUNT) {
+      const fallbackPool = remoteBooks.filter((book) => {
+        const key = bookKey(book);
+        return !pickedKeys.has(key) && !isUsedBook(book, usedTitles, usedIsbns, oldKeys);
+      });
+      for (const book of shuffledSample(fallbackPool, REFRESH_BOOK_COUNT - batch.length)) {
+        pickedKeys.add(bookKey(book));
+        batch.push(book);
       }
     }
 
@@ -859,10 +772,7 @@
             state.totalHistoryCount = 0;
             state.dashboardRecordCount = 0;
             state.todaySubmitCount = 0;
-            stopAutoSubmit(`检测到账号切换：${previousUserId} -> ${state.userId}。正在同步历史记录。`, { keepResume: state.autoResumeSubmit });
-            setTimeout(() => {
-              if (state.apiTemplate && tokenStatus().ok) fetchHistory(true);
-            }, 0);
+            setStatus(`检测到账号切换：${previousUserId} -> ${state.userId}。请同步历史记录。`);
           }
           console.log("NILAM API Assistant: Synced User ID ->", state.userId);
         }
@@ -887,8 +797,6 @@
       }
       saveState();
       renderApiStatus();
-      syncWorkerCursor();
-      resumeAutoSubmitIfReady();
     }
   }
 
@@ -1059,11 +967,11 @@
       const dateVal = obj.date || obj.attributes?.date;
 
       // Fallback through all typical creation date keys
-      const createdVal = obj.createdAt || obj.attributes?.createdAt ||
-        obj.created_at || obj.attributes?.created_at ||
-        obj.publishedAt || obj.attributes?.publishedAt ||
-        obj.published_at || obj.attributes?.published_at ||
-        obj.updatedAt || obj.attributes?.updatedAt;
+      const createdVal = obj.createdAt || obj.attributes?.createdAt || 
+                         obj.created_at || obj.attributes?.created_at ||
+                         obj.publishedAt || obj.attributes?.publishedAt ||
+                         obj.published_at || obj.attributes?.published_at ||
+                         obj.updatedAt || obj.attributes?.updatedAt;
 
       if (dateVal || createdVal) {
         if (dateVal === todayStr) {
@@ -1197,7 +1105,6 @@
 
       setStatus(`成功同步历史记录，共 ${state.totalHistoryCount} 条数据，去重已读 ${state.submittedTitles.length} 本。`);
       if (renderAfter) {
-        applyFilters();
         renderApiStatus();
         renderBookSelect();
       }
@@ -1239,14 +1146,16 @@
   }
 
   function isCurrentBookDuplicate() {
-    return isUsedBook(currentBook(), submittedTitleSet(), submittedIsbnSet());
-  }
+    const book = currentBook();
+    if (!book) return false;
 
-  function skipUsedBookSelection() {
-    const before = state.selectedKey;
-    applyFilters();
-    renderBookSelect();
-    return state.selectedKey && state.selectedKey !== before;
+    const titleLower = String(book.title || "").trim().toLowerCase();
+    const isbnClean = String(book.isbn || "").replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase();
+
+    const submittedTitlesSet = new Set((state.submittedTitles || []).map(t => String(t).trim().toLowerCase()));
+    const submittedIsbnsSet = new Set((state.submittedIsbns || []).map(i => String(i).replaceAll("-", "").replaceAll(" ", "").trim().toLowerCase()));
+
+    return submittedTitlesSet.has(titleLower) || (isbnClean && submittedIsbnsSet.has(isbnClean));
   }
 
   function patchFetch() {
@@ -1307,7 +1216,6 @@
 
             saveState();
             console.log("NILAM API Assistant: Intercepted and synced records ->", state.submittedTitles.length, "total ->", state.totalHistoryCount, "today ->", state.todaySubmitCount);
-            applyFilters();
             renderApiStatus();
             renderBookSelect();
           } catch (e) {
@@ -1386,7 +1294,6 @@
 
               saveState();
               console.log("NILAM API Assistant: Intercepted and synced XHR records ->", state.submittedTitles.length, "total ->", state.totalHistoryCount, "today ->", state.todaySubmitCount);
-              applyFilters();
               renderApiStatus();
               renderBookSelect();
             } catch (e) {
@@ -1432,20 +1339,7 @@
     const todayCount = state.todaySubmitCount || 0;
     if (todayCount >= 30) {
       setStatus("拦截：今日提交已达安全上限（30本），防止封号风险！");
-      return "daily_limit";
-    }
-
-    const rawBook = currentBook();
-    const book = bookForApi(rawBook);
-    if (!book) {
-      setStatus("请先选择一本图书。");
-      return "no_book";
-    }
-    if (isCurrentBookDuplicate()) {
-      await advanceBookCursor(rawBook?.language);
-      const skipped = skipUsedBookSelection();
-      setStatus(skipped ? "已跳过已读书本，改选下一本未读书。" : "提交拦截：该书已被阅读，当前列表没有未读书。请刷新题库。");
-      return skipped ? "duplicate_skipped" : "duplicate_blocked";
+      return;
     }
 
     if (state.lastSubmitTime) {
@@ -1453,21 +1347,31 @@
       if (elapsed < 10000) {
         const remaining = Math.ceil((10000 - elapsed) / 1000);
         setStatus(`冷却拦截：为了模拟真人录入，请等待 ${remaining} 秒冷却时间。`);
-        return "cooldown";
+        return;
       }
+    }
+
+    const book = bookForApi(currentBook());
+    if (!book) {
+      setStatus("请先选择一本图书。");
+      return;
+    }
+    if (isCurrentBookDuplicate()) {
+      setStatus("提交拦截：该书已被阅读，请勿重复提交。");
+      return;
     }
     if (!state.apiTemplate) {
       setStatus("未捕获凭证：请先在 AINS 网页上手动提交一次 NILAM 以捕获 API 凭证。");
-      return "missing_template";
+      return;
     }
-    if (!ensureUsableToken("提交")) return "missing_token";
+    if (!ensureUsableToken("提交")) return;
 
     if (!state.userId) {
       let auth = state.apiTemplate.headers["Authorization"] || state.apiTemplate.headers["authorization"];
       updateCapturedToken(auth);
       if (!state.userId) {
         setStatus("用户 ID 缺失。请尝试重新登录。");
-        return "missing_user";
+        return;
       }
     }
 
@@ -1478,7 +1382,7 @@
       setDiagnostics(preflight);
       if (!preflight.ok) {
         setStatus(`提交拦截：本地预校验未通过 (${preflight.message})`);
-        return "preflight_blocked";
+        return;
       }
 
       const headers = {
@@ -1501,8 +1405,6 @@
         state.tokenExpiresAt = 0;
         saveState();
         renderApiStatus();
-        setStatus("提交返回 401，登录凭证已过期。");
-        return "missing_token";
       }
       if (!response.ok) {
         console.error("NILAM API Assistant: Response Error Detail ->", text);
@@ -1527,7 +1429,6 @@
       state.totalHistoryCount = (state.totalHistoryCount || 0) + 1;
       state.dashboardRecordCount = (state.dashboardRecordCount || 0) + 1;
       state.lastSubmitTime = Date.now();
-      await advanceBookCursor(book.language);
 
       // Update AINS dashboard DOM directly without refresh
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
@@ -1536,8 +1437,8 @@
         const text = node.nodeValue;
         const prevCount = String(state.dashboardRecordCount - 1);
         if (text.includes(prevCount) && node.parentElement && node.parentElement.innerText && node.parentElement.innerText.includes("Rekod")) {
-          node.nodeValue = text.replace(prevCount, String(state.dashboardRecordCount));
-          break;
+           node.nodeValue = text.replace(prevCount, String(state.dashboardRecordCount));
+           break;
         }
       }
 
@@ -1549,8 +1450,17 @@
 
       const currentIndex = state.filtered.findIndex((b) => bookKey(b) === state.selectedKey);
       let isLastBook = false;
-      if (currentIndex !== -1 && currentIndex < state.filtered.length - 1) {
-        state.selectedKey = bookKey(state.filtered[currentIndex + 1]);
+      // Advance to the next unread book
+      let foundNext = false;
+      for (let i = currentIndex + 1; i < state.filtered.length; i++) {
+        state.selectedKey = bookKey(state.filtered[i]);
+        if (!isCurrentBookDuplicate()) {
+          foundNext = true;
+          break;
+        }
+      }
+      
+      if (foundNext) {
         saveState();
         renderBookSelect();
       } else {
@@ -1560,14 +1470,12 @@
 
       // Automatically fetch updated history and refresh book list if needed
       fetchHistory(true).then(() => {
-        if (isLastBook) {
-          refreshBooks(); // Automatically load new books when exhausted
-        }
+         if (isLastBook) {
+           refreshBooks(); // Automatically load new books when exhausted
+         }
       }).catch(err => console.error("Auto-sync failed:", err));
-      return "submitted";
     } catch (error) {
       setStatus(`提交失败：${error.message}`);
-      return "error";
     }
   }
 
@@ -1625,7 +1533,7 @@
     if (!submitBtn) return;
 
     if (isCurrentBookDuplicate()) {
-      return;
+      return; 
     }
 
     if (!state.lastSubmitTime) {
@@ -1726,9 +1634,12 @@
         throw new Error("sync history first so used books can be excluded");
       }
 
-      await syncWorkerCursor();
       const remoteBooks = await loadRemoteBooks();
-      const batch = cursorBookBatch(remoteBooks);
+      const oldKeys = new Set((state.books || []).map(bookKey));
+      const usedTitles = new Set((state.submittedTitles || []).map(t => String(t).trim().toLowerCase()));
+      const usedIsbns = new Set((state.submittedIsbns || []).map(cleanIsbn));
+      const batch = freshUnusedBookBatch(remoteBooks, oldKeys)
+        .filter((book) => !isUsedBook(book, usedTitles, usedIsbns, oldKeys));
       if (batch.length === 0) {
         throw new Error("no unused remote books available");
       }
@@ -1740,7 +1651,7 @@
       renderFilterControls();
       renderBookSelect();
       renderApiStatus();
-      setStatus(`Loaded ${state.books.length} cursor books (ZH/BM/EN).`);
+      setStatus(`Loaded ${state.books.length} unused books.`);
     } catch (error) {
       setStatus(`Refresh unused books failed: ${error.message}`);
     }
@@ -1898,60 +1809,19 @@
 
   let autoSubmitTimer = null;
 
-  function stopAutoSubmit(message, options = {}) {
-    const btn = document.querySelector("#nia-auto-submit");
-    if (autoSubmitTimer) clearInterval(autoSubmitTimer);
-    autoSubmitTimer = null;
-    if (!options.keepResume) {
-      state.autoResumeSubmit = false;
-      saveState();
-    }
-    if (btn) {
-      btn.textContent = "🚀 自动提交 (1分钟/次)";
-      btn.classList.remove("nia-submit");
-      btn.classList.add("nia-secondary");
-    }
-    if (message) setStatus(message);
-  }
-
-  function refreshAinsAndResume(message) {
-    state.autoResumeSubmit = true;
-    state.autoResumeRefreshAt = Date.now();
-    saveState();
-    stopAutoSubmit(message || "正在刷新 AINS，稍后自动恢复自动提交。", { keepResume: true });
-    setTimeout(() => window.location.reload(), 1200);
-  }
-
-  function resumeAutoSubmitIfReady() {
-    if (!state.autoResumeSubmit || autoSubmitTimer) return;
-    if ((state.todaySubmitCount || 0) >= 30) {
-      stopAutoSubmit("今日额度已满，自动恢复已取消。");
-      return;
-    }
-    if (!state.apiTemplate || !state.userId) {
-      setStatus("等待 AINS 捕获登录凭证后自动恢复提交。");
-      return;
-    }
-    if (!tokenStatus().ok) {
-      setStatus("AINS 已刷新，正在等待新的登录凭证。");
-      return;
-    }
-    setStatus("凭证已恢复，继续自动提交。");
-    toggleAutoSubmit();
-  }
-
   function toggleAutoSubmit() {
     const btn = document.querySelector("#nia-auto-submit");
     if (!btn) return;
-
+    
     if (autoSubmitTimer) {
-      stopAutoSubmit("自动提交已停止。");
+      clearInterval(autoSubmitTimer);
+      autoSubmitTimer = null;
+      btn.textContent = "🚀 自动提交 (1分钟/次)";
+      btn.classList.remove("nia-submit");
+      btn.classList.add("nia-secondary");
+      setStatus("自动提交已停止。");
     } else {
-      const status = tokenStatus();
-      if (!status.ok) {
-        refreshAinsAndResume(`自动提交需要有效凭证（${status.label}），正在刷新 AINS 后恢复。`);
-        return;
-      }
+      if (!ensureUsableToken("自动提交")) return;
       if ((state.todaySubmitCount || 0) >= 30) {
         setStatus("今日额度已满，无法开启自动提交。");
         return;
@@ -1959,79 +1829,64 @@
       btn.textContent = "🛑 停止自动提交 (运行中...)";
       btn.classList.remove("nia-secondary");
       btn.classList.add("nia-submit");
-      state.autoResumeSubmit = true;
-      saveState();
       setStatus("已开启自动提交。正在执行...");
 
       const executeAutoSubmit = async () => {
+        // Skip duplicate books automatically
+        if (isCurrentBookDuplicate()) {
+          const currentIndex = state.filtered.findIndex((b) => bookKey(b) === state.selectedKey);
+          let foundNext = false;
+          for (let i = currentIndex + 1; i < state.filtered.length; i++) {
+            state.selectedKey = bookKey(state.filtered[i]);
+            if (!isCurrentBookDuplicate()) {
+              foundNext = true;
+              break;
+            }
+          }
+          if (foundNext) {
+            saveState();
+            renderBookSelect();
+          } else {
+            toggleAutoSubmit();
+            setStatus("没有更多未读图书，自动提交已停止。请刷新题库。");
+            return;
+          }
+        }
+
+        const currentBook = document.querySelector("#nia-book")?.value;
+        if (!currentBook) {
+          toggleAutoSubmit();
+          setStatus("没有可用图书，自动提交已停止。请刷新题库。");
+          return;
+        }
         if ((state.todaySubmitCount || 0) >= 30) {
-          stopAutoSubmit("今日额度已满，自动提交已停止。");
-          alert("🎉 NILAM 自动挂机已完成：\n\n今日 30 本提交额度已满，自动挂机已停止。");
+          toggleAutoSubmit();
+          setStatus("今日额度已满，自动提交已停止。");
+          alert("🎉 NILAM 自动挂机已完成：\n\n今日 30 本提交额度已满，为了防止封号风险，自动提交已停止。");
           return;
         }
         if (!state.apiTemplate) {
-          refreshAinsAndResume("API 凭证丢失，正在刷新 AINS，刷新后自动恢复提交。");
+          toggleAutoSubmit();
+          setStatus("API 凭证丢失，自动提交已停止。");
           return;
         }
-        if (!tokenStatus().ok) {
-          refreshAinsAndResume("登录凭证已过期，正在刷新 AINS，刷新后自动恢复提交。");
-          return;
+        await submitApi();
+        if (autoSubmitTimer) {
+          setStatus("自动提交等待中... 下一本书将在 1 分钟后提交。");
         }
-
-        for (let attempts = 0; attempts <= REFRESH_BOOK_COUNT; attempts++) {
-          if (!currentBook()) {
-            await refreshBooks();
-            if (!currentBook()) {
-              stopAutoSubmit("没有可用图书，自动提交已停止。请刷新题库。");
-              alert("NILAM 自动挂机已暂停：\n\n当前题库没有可用未读书，请点击「Refresh Unused Books」或同步记录后再试。");
-              return;
-            }
-          }
-
-          const result = await submitApi();
-          if (result === "duplicate_skipped") {
-            setStatus("自动提交已跳过已读书本，正在尝试下一本。");
-            continue;
-          }
-          if (result === "duplicate_blocked" || result === "no_book") {
-            await refreshBooks();
-            continue;
-          }
-          if (result === "submitted" && autoSubmitTimer) {
-            setStatus("自动提交等待中... 下一本书将在 1 分钟后提交。");
-          }
-          if (["daily_limit", "missing_template", "missing_token", "missing_user", "preflight_blocked", "error"].includes(result)) {
-            const reason = {
-              daily_limit: "今日额度已满",
-              missing_template: "缺少 API 捕获数据",
-              missing_token: "登录凭证已过期",
-              missing_user: "用户 ID 缺失",
-              preflight_blocked: "提交数据预校验失败",
-              error: "提交失败"
-            }[result] || "未知错误";
-            if (result === "missing_template" || result === "missing_token") {
-              refreshAinsAndResume(`自动提交遇到${reason}，正在刷新 AINS 后恢复。`);
-            } else {
-              stopAutoSubmit(`自动提交已停止：${reason}。`);
-            }
-          }
-          return;
-        }
-
-        stopAutoSubmit("自动提交已暂停：连续跳过太多已读书，请同步记录或刷新题库。");
       };
 
-      autoSubmitTimer = setInterval(executeAutoSubmit, 61000);
       executeAutoSubmit();
+      autoSubmitTimer = setInterval(executeAutoSubmit, 61000);
     }
   }
 
   function createPanel() {
     if (document.getElementById(PANEL_ID)) return;
     try {
-      const panel = document.createElement("section");
-      panel.id = PANEL_ID;
-      panel.innerHTML = `
+    const panel = document.createElement("section");
+    panel.id = PANEL_ID;
+    panel.innerHTML = `
       <style>
         #${PANEL_ID} {
           position: fixed;
@@ -2175,80 +2030,80 @@
         <div id="nia-status">正在加载书籍数据库...</div>
       </div>
     `;
-      document.body.append(panel);
+    document.body.append(panel);
 
-      const savedX = localStorage.getItem("nilam_api_panel_x");
-      const savedY = localStorage.getItem("nilam_api_panel_y");
-      const minGap = 10;
-      const panelWidth = 320;
+    const savedX = localStorage.getItem("nilam_api_panel_x");
+    const savedY = localStorage.getItem("nilam_api_panel_y");
+    const minGap = 10;
+    const panelWidth = 320;
 
-      if (savedX && savedY) {
-        let x = parseFloat(savedX);
-        let y = parseFloat(savedY);
-        if (isNaN(x)) x = window.innerWidth - panelWidth - minGap;
-        if (isNaN(y)) y = minGap;
+    if (savedX && savedY) {
+      let x = parseFloat(savedX);
+      let y = parseFloat(savedY);
+      if (isNaN(x)) x = window.innerWidth - panelWidth - minGap;
+      if (isNaN(y)) y = minGap;
 
-        x = Math.max(minGap, Math.min(x, window.innerWidth - panelWidth - minGap));
-        y = Math.max(minGap, Math.min(y, window.innerHeight - 300));
+      x = Math.max(minGap, Math.min(x, window.innerWidth - panelWidth - minGap));
+      y = Math.max(minGap, Math.min(y, window.innerHeight - 300));
 
-        panel.style.left = `${x}px`;
-        panel.style.top = `${y}px`;
-        panel.style.right = "auto";
-        panel.style.bottom = "auto";
-      } else {
-        panel.style.right = `${minGap}px`;
-        panel.style.bottom = `${minGap}px`;
+      panel.style.left = `${x}px`;
+      panel.style.top = `${y}px`;
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+    } else {
+      panel.style.right = `${minGap}px`;
+      panel.style.bottom = `${minGap}px`;
+    }
+
+    initDrag(document.getElementById("nia-drag-header"), panel);
+    adjustPanelToViewport();
+
+    document.querySelector("#nia-category").value = state.filters.category;
+    document.querySelector("#nia-language").value = state.filters.language;
+    document.querySelector("#nia-date").value = normalizeIsoDate(state.selectedDate);
+
+    panel.addEventListener("change", (event) => {
+      if (event.target.id === "nia-date") state.selectedDate = normalizeIsoDate(event.target.value);
+      if (event.target.id === "nia-book") state.selectedKey = event.target.value;
+      if (event.target.id === "nia-category") state.filters.category = event.target.value;
+      if (event.target.id === "nia-language") state.filters.language = event.target.value;
+      applyFilters();
+      renderBookSelect();
+    });
+
+    panel.addEventListener("click", async (event) => {
+      if (event.target.id === "nia-toggle") toggleCollapse();
+      const button = event.target.closest("button");
+      if (!button) return;
+      if (button.id === "nia-date-prev" || button.id === "nia-date-next") {
+        shiftSelectedDate(button.id === "nia-date-next" ? 1 : -1);
       }
-
-      initDrag(document.getElementById("nia-drag-header"), panel);
-      adjustPanelToViewport();
-
-      document.querySelector("#nia-category").value = state.filters.category;
-      document.querySelector("#nia-language").value = state.filters.language;
-      document.querySelector("#nia-date").value = normalizeIsoDate(state.selectedDate);
-
-      panel.addEventListener("change", (event) => {
-        if (event.target.id === "nia-date") state.selectedDate = normalizeIsoDate(event.target.value);
-        if (event.target.id === "nia-book") state.selectedKey = event.target.value;
-        if (event.target.id === "nia-category") state.filters.category = event.target.value;
-        if (event.target.id === "nia-language") state.filters.language = event.target.value;
-        applyFilters();
+      if (button.id === "nia-submit") await submitApi();
+      if (button.id === "nia-auto-submit") toggleAutoSubmit();
+      if (button.id === "nia-refresh-books") await refreshBooks();
+      if (button.id === "nia-replay-api") await replayCapturedApi();
+      if (button.id === "nia-sync-api") await fetchHistory();
+      if (button.id === "nia-clear-api") {
+        if (state.apiTemplate) {
+          delete state.apiTemplate.headers.authorization;
+        }
+        state.userId = null;
+        state.tokenExpiresAt = null;
+        state.submittedTitles = [];
+        state.submittedIsbns = [];
+        state.totalHistoryCount = 0;
+        state.dashboardRecordCount = 0;
+        state.todaySubmitCount = 0;
+        state.lastSubmitTime = null;
+        saveState();
+        renderApiStatus();
         renderBookSelect();
-      });
+        setStatus("登录凭证已清除。请在 AINS 手动操作一次以重新捕获。");
+      }
+    });
 
-      panel.addEventListener("click", async (event) => {
-        if (event.target.id === "nia-toggle") toggleCollapse();
-        const button = event.target.closest("button");
-        if (!button) return;
-        if (button.id === "nia-date-prev" || button.id === "nia-date-next") {
-          shiftSelectedDate(button.id === "nia-date-next" ? 1 : -1);
-        }
-        if (button.id === "nia-submit") await submitApi();
-        if (button.id === "nia-auto-submit") toggleAutoSubmit();
-        if (button.id === "nia-refresh-books") await refreshBooks();
-        if (button.id === "nia-replay-api") await replayCapturedApi();
-        if (button.id === "nia-sync-api") await fetchHistory();
-        if (button.id === "nia-clear-api") {
-          if (state.apiTemplate) {
-            delete state.apiTemplate.headers.authorization;
-          }
-          state.userId = null;
-          state.tokenExpiresAt = null;
-          state.submittedTitles = [];
-          state.submittedIsbns = [];
-          state.totalHistoryCount = 0;
-          state.dashboardRecordCount = 0;
-          state.todaySubmitCount = 0;
-          state.lastSubmitTime = null;
-          saveState();
-          renderApiStatus();
-          renderBookSelect();
-          setStatus("登录凭证已清除。请在 AINS 手动操作一次以重新捕获。");
-        }
-      });
-
-      panelReady = true;
-      renderApiStatus();
+    panelReady = true;
+    renderApiStatus();
     } catch (error) {
       console.error("NILAM API Assistant: createPanel failed", error);
       document.getElementById(PANEL_ID)?.remove();
@@ -2345,7 +2200,6 @@
         scrapeProfileFromPage();
         scrapeDashboardRecordCount();
         renderHeaderProfile();
-        resumeAutoSubmitIfReady();
       }
     }, 1000);
 
@@ -2361,7 +2215,6 @@
         if (state.apiTemplate && state.userId) {
           fetchHistory(); // Sync history on load if credentials exist
         }
-        resumeAutoSubmitIfReady();
       }, 500);
     } catch (error) {
       console.error("NILAM API Assistant: Init failed:", error);
