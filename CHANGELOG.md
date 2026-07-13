@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.3 - 2026-07-13
+
+- Fix the `"Invalid entry 1"` (HTTP 400) rejection: it was a **future submit date**, not a provider/secret problem. The v0.9.2 self-check dump proved the secret and every provider entry are correct (captured provider decrypts and all 10 fields match; the rebuilt payload is internally consistent, `type` = `"book"` in both). The only meaningful difference between the working seed (dated today) and the rejected submit was the date — the panel had auto-advanced forward into the future (07-15 vs today 07-13), and AINS rejects reading records dated after today. Now: submit dates are clamped to today at the latest (`clampDateToToday`), the post-submit auto-advance steps **backward** one day to backfill valid past dates instead of forward into the future, and a stored future date is pulled back to today on load.
+
 ## 0.9.2 - 2026-07-13
 
 - Diagnostics for the server-side `"Invalid entry 1"` (HTTP 400) rejection: AINS validates the `provider` signature field-by-field server-side, and entry 1 (`type`) is being rejected. The "显示捕获的 API 负载" box now shows a full per-entry dump of the captured (website-built, working) provider decrypted with our secret, plus — on a failed API submit — the same dump for our rebuilt payload, so the exact field whose encoding diverges is visible without devtools. `entry 0` (`user`) passing server-side implies the secret itself is correct; the mismatch is a per-field encoding difference in how the provider is rebuilt.

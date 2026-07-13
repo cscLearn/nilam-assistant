@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.9.2
+// @version      0.9.3
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.9.2";
+  const SCRIPT_VERSION = "0.9.3";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
   const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
@@ -556,6 +556,13 @@
     return `${match[1]}-${match[2]}-${match[3]}`;
   }
 
+  // AINS rejects reading records dated in the future ("you can't have read a book
+  // on a day that hasn't happened"). Clamp any submit date to today at the latest.
+  function clampDateToToday(iso) {
+    const normalized = normalizeIsoDate(iso);
+    return normalized > todayIsoDate() ? todayIsoDate() : normalized;
+  }
+
   function bookKey(book) {
     return String(book?.id || `${book?.title || ""}|${book?.author || ""}|${book?.isbn || ""}`);
   }
@@ -577,7 +584,7 @@
     if (!book) return null;
     const lang = book.language || "bm";
     return {
-      date: normalizeIsoDate(state.selectedDate),
+      date: clampDateToToday(state.selectedDate),
       title: book.title || "",
       pages: Number(book.pages || 0),
       isbn: formatIsbn(book.isbn),
@@ -2030,8 +2037,10 @@
       saveState();
       renderApiStatus();
 
-      // Automatically shift selected date to the next day
-      shiftSelectedDate(1);
+      // Backfill into the PAST after each submit. AINS rejects future dates, so
+      // moving forward from today would immediately fail; stepping back one day
+      // keeps every record on a valid, already-passed date.
+      shiftSelectedDate(-1);
 
       const currentIndex = state.filtered.findIndex((b) => bookKey(b) === state.selectedKey);
       let isLastBook = false;
@@ -2847,7 +2856,7 @@
     }, 1000);
 
     try {
-      state.selectedDate = normalizeIsoDate(state.selectedDate);
+      state.selectedDate = clampDateToToday(state.selectedDate);
       applyFilters();
       tryCreatePanel();
 
