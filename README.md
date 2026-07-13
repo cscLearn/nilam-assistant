@@ -12,7 +12,7 @@
 | :--- | :--- | :--- | :--- |
 | **⭐ NILAM Hybrid Assistant v1.1.6<br>(二合一双模融合版)** | • **Tab 选项卡紧凑界面**<br>• 默认 ⚡ **API 自动批量提交** (V2)<br>• 备用 📝 **DOM 辅助填表降级** (V1)<br>• 内置 **18,000 本华巫英巨量题库**<br>• 依账号 User ID 种子打乱防撞 | **【强烈推荐】**<br>兼顾极速提交与防封降级保障，适配各种屏幕尺寸不遮挡 | 👉 [**点击安装 v1.1.6 最新版**](https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js?v=1.1.6) |
 | **📦 NILAM API Assistant v0.9.3<br>(SQLite 云端服务版)** | • 连接 `csc` 云端 FastAPI 服务<br>• 5,910 本真实书库数据<br>• 数据库服务端游标追踪 | **【云端高阶版】**<br>适合需要连接中央服务器统一记录游标的用户 | 👉 [**点击安装 v0.9.3 API版**](https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js) |
-| **📝 NILAM Assistant v0.6.0<br>(纯 DOM 半自动填表版)** | • 100% 模拟人类原生点击<br>• 自动填充输入框，手动点 Hantar | **【极简备用版】**<br>最原始安全的填表辅助，绝无 API 风控风险 | 👉 [**点击安装 v0.6.0 DOM版**](https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-assistant.user.js) |
+| **📝 NILAM Assistant v5.0<br>(纯 DOM 半自动填表版)** | • `@grant none` 零沙盒架构<br>• 五星点击 100% 正常（view:window 直接可用）<br>• 10 本内置书库（BM/EN/ZH）<br>• 自动填写第一、二页，手动点 Hantar | **【稳定备用版】**<br>五星绝对有效，不依赖 API Token，适合稳定日常使用 | 👉 [**点击安装 v5.0 DOM版**](https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-assistant.user.js) |
 
 ---
 
