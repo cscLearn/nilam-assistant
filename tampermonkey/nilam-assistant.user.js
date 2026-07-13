@@ -15,6 +15,7 @@
   "use strict";
 
   let currentIndex = Number(localStorage.getItem("nilam_currentIndex") || 0);
+  let filledPage2 = false;
 
   const booksData = [
     {
@@ -340,6 +341,7 @@
     setTimeout(() => {
       forceClickFifthStar();
       scrollToActionButton();
+      filledPage2 = true;
     }, 500);
   }
 
@@ -354,7 +356,7 @@
     if (btnPasti) {
       btnPasti.click();
       console.log("✅ 已点击 Pasti");
-
+      filledPage2 = false;
       nextBook();
       return;
     }
@@ -371,7 +373,7 @@
       return;
     }
 
-    if (summaryInput) {
+    if (summaryInput && !filledPage2) {
       scrollToActionButton();
     }
   }, 700);
