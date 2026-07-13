@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 - 2026-07-13
+
+- Fix API submit silently doing nothing after a successful capture. The v0.9.0 `missing_relations` guard blocked submission whenever the captured body lacked top-level `student`/`school` — but AINS (Strapi) derives those relations from the authenticated user, so the real website POST legitimately omits them (the seeding submission proved that shape works). Removed the guard; the captured template is now treated as authoritative and only book-specific fields + the re-encrypted provider are swapped.
+- Make blocked/failed submits visible: preflight failures, HTTP errors, and rejections now raise an `alert` instead of only writing to the bottom-of-panel status line (which sits below the fold and looked like "no response").
+- Add a decisive `provider` secret self-check: after capture, decrypt the website-built provider with our `PROVIDER_SECRET` and compare field-by-field against the captured plaintext. Result is logged to console and surfaced in the panel — this definitively answers whether the signing key matches AINS (a mismatch means every API submit will be rejected).
+
 ## 0.9.0 - 2026-07-13
 
 - **New: 半自动捕获真实模板 (semi-auto real-template capture).** The reliable way to get a submittable template is to let the AINS site's own code build one genuine POST (correct endpoint, provider signature, and every relation/hidden field) and capture it — not to hand-build one (which caused orphan records in v0.8.0 and 400s in v0.8.1/0.8.2). New panel button "① 半自动捕获真实模板" picks a fresh unused book, autofills the native AINS add-record form with it (date, title, ISBN, pages, author, publisher, year, book type, category/language dropdowns, summary, review, 5-star) using the proven form-fill engine ported from `nilam-assistant.user.js` v2.0.7, and you click the official Hantar/Simpan to submit. The existing fetch/XHR interception captures that real POST as the template; from then on API submits reuse it. The seeding submission is a real, non-wasted NILAM record.

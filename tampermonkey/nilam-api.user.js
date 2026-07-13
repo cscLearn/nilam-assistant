@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.9.0
+// @version      0.9.1
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.9.0";
+  const SCRIPT_VERSION = "0.9.1";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
   const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
@@ -1019,6 +1019,42 @@
     return { ok: true, message: "preflight OK" };
   }
 
+  // After a real template is captured, decrypt its website-built provider with
+  // our PROVIDER_SECRET and compare against the plaintext data fields. If it
+  // matches, our secret is correct and re-encrypting for new books will be
+  // accepted by the server. If not, the secret is wrong and every API submit
+  // will be rejected — this is the single decisive ground-truth check.
+  function verifyCapturedProviderSecret() {
+    const data = capturedDataTemplate();
+    if (!data || !data.provider) {
+      console.warn("NILAM API Assistant: provider secret self-check -> no provider field in captured template");
+      return null;
+    }
+    let decrypted;
+    try {
+      decrypted = decryptProvider(data.provider);
+    } catch (error) {
+      console.error("NILAM API Assistant: provider secret self-check -> DECRYPT FAILED (secret is WRONG):", error.message);
+      return false;
+    }
+    if (!decrypted) {
+      console.error("NILAM API Assistant: provider secret self-check -> decrypt returned empty (secret is WRONG)");
+      return false;
+    }
+    const mismatches = [];
+    for (const key of PROVIDER_ENTRY_ORDER) {
+      if (normalizeComparable(data[key]) !== normalizeComparable(decrypted[key])) {
+        mismatches.push({ key, body: data[key], provider: decrypted[key] });
+      }
+    }
+    if (mismatches.length) {
+      console.error("NILAM API Assistant: provider secret self-check -> FIELD MISMATCH (secret likely wrong or field order differs):", mismatches, { capturedData: data, decryptedProvider: decrypted });
+      return false;
+    }
+    console.log("NILAM API Assistant: provider secret self-check -> MATCH ✅ (secret correct; API submit should be accepted).", { capturedData: data });
+    return true;
+  }
+
   function setDiagnostics(result) {
     const el = document.querySelector("#nia-diagnostics");
     if (!el) return;
@@ -1634,7 +1670,13 @@
     applyFilters();
     renderApiStatus();
     renderBookSelect();
-    setStatus("✅ 已捕获真实提交模板！之后可直接用「点击提交至 AINS (API)」秒交，无需再手动填表。");
+    const secretOk = verifyCapturedProviderSecret();
+    if (secretOk === false) {
+      setDiagnostics({ ok: false, message: "provider 密钥与 AINS 不一致，API 提交会被拒。请看控制台 self-check 日志。" });
+      setStatus("⚠️ 已捕获真实模板，但 provider 密钥自检未通过——API 提交可能被拒。详见控制台。");
+    } else {
+      setStatus("✅ 已捕获真实提交模板，密钥自检通过！之后可直接用「点击提交至 AINS (API)」秒交。");
+    }
     setTimeout(() => { fetchHistory(true).catch(() => {}); }, 800);
   }
 
@@ -1879,11 +1921,11 @@
       }
     }
 
-    const base = capturedDataTemplate();
-    if (!base.student || !base.school) {
-      setStatus("提交拦截：模板缺少学生/学校关联。请点「① 半自动捕获真实模板」重新捕获一次完整请求。");
-      return "missing_relations";
-    }
+    // The captured template is authoritative — it is exactly what the AINS site
+    // itself posted for a real record that succeeded. We replicate its shape and
+    // only swap book-specific fields. We do NOT re-impose a student/school guard:
+    // Strapi derives those relations from the authenticated user, so the real
+    // body may legitimately omit them (blocking on that was silently no-op'ing).
 
     try {
       setStatus("正在提交至 AINS 服务器...");
@@ -1892,6 +1934,7 @@
       setDiagnostics(preflight);
       if (!preflight.ok) {
         setStatus(`提交拦截：本地预校验未通过 (${preflight.message})`);
+        alert(`提交被本地预校验拦截：\n${preflight.message}\n\n这通常表示 provider 加密密钥与 AINS 不一致。请把控制台(F12)里 "provider secret self-check" 那行日志发给开发者。`);
         return "preflight_blocked";
       }
 
@@ -1921,6 +1964,7 @@
       if (!response.ok) {
         console.error("NILAM API Assistant: Response Error Detail ->", text);
         setDiagnostics({ ok: false, message: text.slice(0, 260) });
+        alert(`AINS 服务器拒绝了这次 API 提交：\nHTTP ${response.status}\n${text.slice(0, 300)}\n\n（播种那次是网站自己提交的，能成功；如果这次 API 提交被拒，多半是 provider 密钥不一致。请把控制台里 provider secret self-check 日志发给开发者。）`);
         throw new Error(`HTTP ${response.status}: ${text.slice(0, 240)}`);
       }
 
