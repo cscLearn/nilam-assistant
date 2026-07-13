@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1 - 2026-07-13
+
+- Fix orphan-record bug from v0.8.0: stop auto-constructing a submit template with only `user` and no `student`/`school`/`class` — Strapi accepted it (HTTP 200) but the record was never linked to the student, so it never showed up in AINS history after refresh.
+- Restore `findProfileData`/`extractId` (deleted in v0.8.0 but still referenced by the XHR handler, throwing a silently-swallowed `ReferenceError`) to auto-extract real relations from intercepted `users/me`/`student-informations` responses.
+- Block `submitApi()` before it posts if the template is still missing `student`/`school`, instead of reporting a false "提交成功".
+- Show a distinct warning state in the panel ("缺少学生关联") instead of the same green "成功" when the captured template has no relations yet.
+
 ## 0.5.5-api - 2026-07-03
 
 - Implement simulated human submit interval (60s cooldown limit) with active countdown and elapsed time indicators.
