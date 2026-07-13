@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.5
+// @version      1.1.6
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.1.5";
+  const SCRIPT_VERSION = "1.1.6";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   const consoleLogs = [];
@@ -184,7 +184,7 @@
   }
 
   const state = {
-    activeTab: "api", // 'api' | 'dom'
+    activeTab: "dom", // 'dom' | 'api'
     books: FALLBACK_BOOKS,
     shuffledBooks: [],
     filtered: [],
@@ -696,6 +696,13 @@
       for (let i = 0; parent && i < 3; i++, parent = parent.parentElement) {
         if (parent.matches('button, label, [role="button"], span, div')) {
           parent.click();
+          ["mousedown", "mouseup", "click"].forEach(type => {
+            parent.dispatchEvent(new MouseEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              view: (typeof unsafeWindow !== "undefined" ? unsafeWindow : window)
+            }));
+          });
           break;
         }
       }
@@ -781,6 +788,15 @@
       resetFillFlags();
     }
 
+    if (pendingUsedKey && document.getElementById("title")) {
+      const pendingBook = state.books.find((book) => bookKey(book) === pendingUsedKey);
+      if (pendingBook) {
+        markBookUsed(pendingBook);
+        resetFillFlags();
+      }
+      pendingUsedKey = "";
+    }
+
     const btnPasti = Array.from(document.querySelectorAll("button, span, div"))
       .find((el) => {
         if (isInsidePanel(el)) return false;
@@ -807,14 +823,10 @@
         }));
       });
 
-      const pendingBook = state.books.find((book) => bookKey(book) === pendingUsedKey);
-      if (pendingBook) markBookUsed(pendingBook);
-      else {
-        const cur = currentBook();
-        if (cur) markBookUsed(cur);
+      const cur = currentBook();
+      if (cur) {
+        pendingUsedKey = bookKey(cur);
       }
-      pendingUsedKey = "";
-      resetFillFlags();
       return true;
     }
 
