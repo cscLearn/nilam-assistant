@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.8
+// @version      1.0.9
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.8";
+  const SCRIPT_VERSION = "1.0.9";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -490,62 +490,32 @@
     }
   }
 
-  // === Safe DOM Property Setter (Fixes 'Cannot read properties of undefined (reading set)') ===
+  // === Safe DOM Property Setter ===
   function isInsidePanel(el) {
     return el && el.closest(`#${PANEL_ID}`);
   }
 
-  function setValueSafely(el, value) {
-    if (!el || isInsidePanel(el)) return false;
+  function setValue(el, value) {
+    if (!el) return false;
     try {
       el.focus();
-      const valStr = String(value ?? "");
+      const setter =
+        Object.getOwnPropertyDescriptor(el.constructor.prototype, "value")?.set ||
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set ||
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
 
-      // Handle Ionic shadow elements (like ion-input, ion-textarea)
-      let targetInput = el;
-      if (el.shadowRoot) {
-        const innerInput = el.shadowRoot.querySelector("input, textarea");
-        if (innerInput) targetInput = innerInput;
-      }
+      if (setter) setter.call(el, String(value ?? ""));
+      else el.value = String(value ?? "");
 
-      const proto = Object.getPrototypeOf(targetInput);
-      let setter = null;
-      try {
-        setter = Object.getOwnPropertyDescriptor(targetInput.constructor.prototype, "value")?.set;
-      } catch (e) {}
-      if (!setter && proto) {
-        try { setter = Object.getOwnPropertyDescriptor(proto, "value")?.set; } catch (e) {}
-      }
-      if (!setter) {
-        try { setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set; } catch (e) {}
-      }
-      if (!setter) {
-        try { setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set; } catch (e) {}
-      }
-
-      if (setter) {
-        try { setter.call(targetInput, valStr); } catch (e) { targetInput.value = valStr; }
-      } else {
-        targetInput.value = valStr;
-      }
-
-      targetInput.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: valStr }));
-      targetInput.dispatchEvent(new Event("input", { bubbles: true }));
-      targetInput.dispatchEvent(new Event("change", { bubbles: true }));
-      targetInput.dispatchEvent(new Event("blur", { bubbles: true }));
-
-      // Propagate values up for Ionic component wrapper if applicable
-      if (el !== targetInput) {
-        el.value = valStr;
-        el.dispatchEvent(new CustomEvent("ionInput", { bubbles: true, detail: { value: valStr } }));
-        el.dispatchEvent(new CustomEvent("ionChange", { bubbles: true, detail: { value: valStr } }));
-      }
-
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: String(value ?? "") }));
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
       el.blur();
       return true;
-    } catch (err) {
-      console.warn("setValueSafely error:", err);
-      try { el.value = String(value ?? ""); } catch (e) {}
+    } catch (e) {
+      console.warn("setValue error:", e);
+      try { el.value = String(value ?? ""); } catch (err) {}
       return false;
     }
   }
@@ -575,7 +545,6 @@
   }
 
   function forceClickFifthStar() {
-    // Strategy 1: Find SVGs with fa-star in outerHTML (matches NILAM's actual DOM)
     const stars = Array.from(document.querySelectorAll("svg"))
       .filter(svg => !isInsidePanel(svg) && svg.outerHTML.includes("fa-star"));
 
@@ -603,6 +572,32 @@
     return false;
   }
 
+  function findDateInput() {
+    const isFormElement = (el) => el && !isInsidePanel(el);
+    const directSelectors = [
+      'input[type="date"]',
+      'input[id*="date" i]',
+      'input[id*="tarikh" i]',
+      'input[name*="date" i]',
+      'input[name*="tarikh" i]'
+    ];
+    for (const selector of directSelectors) {
+      const found = Array.from(document.querySelectorAll(selector)).find(isFormElement);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function fillDate(book) {
+    const dateInput = findDateInput();
+    if (!dateInput) return false;
+    if (dateInput.hasAttribute("readonly")) dateInput.removeAttribute("readonly");
+    if (dateInput.hasAttribute("disabled")) dateInput.removeAttribute("disabled");
+
+    setValue(dateInput, book.date);
+    return true;
+  }
+
   function fillDomMode() {
     const rawBook = currentBook();
     if (!rawBook) {
@@ -612,148 +607,78 @@
 
     try {
       const langName = nilamLanguageName(rawBook.language);
-      let filledCount = 0;
 
-      // ── Page 2 detection: textareas present (Rumusan / Pengajaran) ──
-      const textareas = Array.from(document.querySelectorAll("textarea")).filter(el => !isInsidePanel(el));
-      if (textareas.length >= 1) {
-        // Fill #summary / #review by ID first, fallback to DOM order
-        const summaryEl = document.getElementById("summary") || textareas[0];
-        const reviewEl  = document.getElementById("review")  || textareas[1] || null;
-        setValueSafely(summaryEl, rawBook.rumusan);
-        if (reviewEl) setValueSafely(reviewEl, rawBook.lesson);
-        setTimeout(() => forceClickFifthStar(), 300);
-        setStatus(`📝 第二页已填入 Rumusan 与 Pengajaran，5星已选！请点击【Hantar】。`);
-        return;
-      }
+      // Check Page 1: #title element exists
+      const titleEl = document.getElementById("title");
+      if (titleEl) {
+        const bookData = {
+          date: state.selectedDate,
+          title: rawBook.title,
+          pages: rawBook.pages,
+          isbn: rawBook.isbn,
+          author: rawBook.author,
+          publisher: rawBook.publisher,
+          year: rawBook.year,
+          category: rawBook.category,
+          language: langName
+        };
 
-      // ── Page 1 detection: scan all visible inputs ──
-      const allInputs = Array.from(document.querySelectorAll("input, select")).filter(el => !isInsidePanel(el));
+        fillDate(bookData);
+        setValue(document.getElementById("title"), bookData.title);
+        setValue(document.getElementById("noOfPage"), bookData.pages);
+        setValue(document.getElementById("isbn"), bookData.isbn);
+        setValue(document.getElementById("author"), bookData.author);
+        setValue(document.getElementById("publisher"), bookData.publisher);
+        setValue(document.getElementById("publishedYear"), bookData.year);
 
-      // Try getElementById first (some AINS versions), then fall back to name/label scan
-      const getById = (id) => document.getElementById(id);
+        document.getElementById("typephysical")?.click();
+        selectDropdownByText(0, bookData.category);
+        selectDropdownByText(1, langName);
 
-      function tryFillInput(keywords, value) {
-        // 1. Try exact id match
-        for (const kw of keywords) {
-          const el = getById(kw);
-          if (el && !isInsidePanel(el)) { setValueSafely(el, value); filledCount++; return; }
-        }
-        // 2. Scan all inputs by id/name/placeholder
-        for (const el of allInputs) {
-          if (el.tagName === "SELECT") continue;
-          const sig = `${el.id} ${el.name} ${el.placeholder} ${el.getAttribute("aria-label") || ""}`.toLowerCase();
-          if (keywords.some(kw => sig.includes(kw))) {
-            setValueSafely(el, value); filledCount++; return;
-          }
-        }
-        // 3. Check parent label text
-        for (const el of allInputs) {
-          if (el.tagName === "SELECT") continue;
-          const label = el.closest("ion-item, .form-group, div")
-            ?.querySelector("ion-label, label, .label, span");
-          const labelText = (label?.textContent || "").toLowerCase();
-          if (keywords.some(kw => labelText.includes(kw))) {
-            setValueSafely(el, value); filledCount++; return;
-          }
-        }
-      }
-
-      tryFillInput(["title", "tajuk", "judul"], rawBook.title);
-      tryFillInput(["noofpage", "bilangan", "mukasurat", "muka surat", "page"], String(rawBook.pages));
-      tryFillInput(["isbn"], rawBook.isbn);
-      tryFillInput(["author", "penulis"], rawBook.author);
-      tryFillInput(["publisher", "penerbit"], rawBook.publisher);
-      tryFillInput(["publishedyear", "tahun", "year"], String(rawBook.year));
-
-      // ── Dropdowns: Category & Language ──
-      const langKeywords = {
-        bm: ["bahasa melayu", "melayu", "malaysia", "bm"],
-        en: ["bahasa inggeris", "inggeris", "english", "bi"],
-        zh: ["bahasa cina", "cina", "chinese", "bc", "mandarin"]
-      };
-      const targetLangKws = langKeywords[rawBook.language] || langKeywords.bm;
-      const targetCatKw   = rawBook.category === "Fiksyen" ? "fiksyen" : "bukan fiksyen";
-
-      Array.from(document.querySelectorAll("select")).filter(el => !isInsidePanel(el)).forEach(sel => {
-        const opts = Array.from(sel.options);
-        // try language match
-        const langOpt = opts.find(o => targetLangKws.some(kw => o.textContent.toLowerCase().includes(kw)));
-        // try category match
-        const catOpt  = opts.find(o => o.textContent.toLowerCase().includes(targetCatKw));
-        const matched = langOpt || catOpt;
-        if (matched) {
-          sel.value = matched.value;
-          sel.selectedIndex = matched.index;
-          sel.dispatchEvent(new Event("input",  { bubbles: true }));
-          sel.dispatchEvent(new Event("change", { bubbles: true }));
-          filledCount++;
-        }
-      });
-
-      // ── Ionic ion-select (Kategori / Bahasa) ──
-      document.querySelectorAll("ion-select").forEach(ionSel => {
-        if (isInsidePanel(ionSel)) return;
-        const label = (ionSel.closest("ion-item")?.querySelector("ion-label")?.textContent || "").toLowerCase();
-        if (label.includes("kategori") || label.includes("category")) {
-          ionSel.value = rawBook.category;
-          ionSel.dispatchEvent(new CustomEvent("ionChange", { bubbles: true, detail: { value: rawBook.category } }));
-          filledCount++;
-        } else if (label.includes("bahasa") || label.includes("language")) {
-          ionSel.value = langName;
-          ionSel.dispatchEvent(new CustomEvent("ionChange", { bubbles: true, detail: { value: langName } }));
-          filledCount++;
-        }
-      });
-
-      // ── Physical book radio / toggle ──
-      document.getElementById("typephysical")?.click();
-
-      if (filledCount > 0) {
         // Mark book as used & advance pointer
         state.submittedTitles.push(rawBook.title);
         state.submittedIsbns.push(rawBook.isbn);
-        saveState(); applyFilters(); renderBookSelect();
-        setStatus(`📝 已填入《${rawBook.title}》[${rawBook.category}][${langName}]，请点击【Seterusnya】继续！`);
-      } else {
-        setStatus("⚠️ 未找到表单字段，请确认已在 AINS 填书页面！", true);
+        saveState();
+        applyFilters();
+        renderBookSelect();
+
+        setStatus(`📝 第一页《${rawBook.title}》已成功自动填入！已选 [${rawBook.category}] 与 [${langName}]。请点击【Seterusnya】。`);
+        return;
       }
+
+      // Check Page 2: #summary element exists
+      const summaryEl = document.getElementById("summary");
+      if (summaryEl) {
+        setValue(document.getElementById("summary"), rawBook.rumusan);
+        setValue(document.getElementById("review"), rawBook.lesson);
+
+        setTimeout(() => {
+          forceClickFifthStar();
+        }, 300);
+
+        setStatus(`📝 第二页已成功自动填入 Rumusan 与 Pengajaran，并选中 5 星好评！请点击【Hantar】。`);
+        return;
+      }
+
+      setStatus("⚠️ 未能在页面上找到 AINS 书籍表单的 title 或 summary 元素。请确认在添加书籍页面！", true);
     } catch (e) {
       setStatus(`DOM 填表失败: ${e.message}`, true);
     }
   }
 
-
-  // ── Diagnostic: reports what elements are visible on current page ──
   function diagnosePage() {
-    const all = Array.from(document.querySelectorAll(
-      "input, textarea, select, ion-input, ion-textarea, ion-select, [contenteditable='true']"
-    )).filter(el => !isInsidePanel(el));
+    const titleEl = document.getElementById("title");
+    const summaryEl = document.getElementById("summary");
+    const dateInput = findDateInput();
+    const selects = Array.from(document.querySelectorAll("select")).filter(el => !isInsidePanel(el));
 
-    if (all.length === 0) {
-      setStatus("⚠️ 诊断：页面上找不到任何输入字段！请确认在填表页面。", true);
-      return;
-    }
+    let report = [];
+    report.push(`[title input]: ${titleEl ? "FOUND (id=title)" : "NOT FOUND"}`);
+    report.push(`[summary textarea]: ${summaryEl ? "FOUND (id=summary)" : "NOT FOUND"}`);
+    report.push(`[date input]: ${dateInput ? `FOUND (id=${dateInput.id || "none"}, type=${dateInput.type})` : "NOT FOUND"}`);
+    report.push(`[select dropdowns]: Found ${selects.length} selects outside panel`);
 
-    const lines = all.map(el => {
-      const tag  = el.tagName.toLowerCase();
-      const id   = el.id || "-";
-      const name = el.name || el.getAttribute("name") || "-";
-      const ph   = el.placeholder || el.getAttribute("placeholder") || "-";
-      const lbl  = el.closest("ion-item, .form-group, div")?.querySelector("ion-label, label")?.textContent?.trim() || "-";
-      return `[${tag}] id=${id} name=${name} ph=${ph} label=${lbl}`;
-    });
-
-    console.log("=== NILAM DOM Diagnostic ===");
-    lines.forEach(l => console.log(l));
-
-    // Show summary in status bar
-    const tags = all.map(el => el.tagName.toLowerCase());
-    const summary = [...new Set(tags)].join(", ");
-    setStatus(`🔍 诊断：找到 ${all.length} 个字段 [${summary}]。详见 F12 Console。`);
-
-    // Also alert first 5 for quick inspection
-    alert("NILAM诊断 (前5个字段):\n" + lines.slice(0, 5).join("\n") + (lines.length > 5 ? `\n...共${lines.length}个，其余见F12 Console` : ""));
+    alert("NILAM 诊断信息:\n\n" + report.join("\n"));
   }
 
   function createPanel() {
