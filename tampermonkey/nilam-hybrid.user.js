@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.9
+// @version      1.1.0
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.9";
+  const SCRIPT_VERSION = "1.1.0";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -105,6 +105,32 @@
   }
   if (!Array.isArray(state.submittedTitles)) state.submittedTitles = [];
   if (!Array.isArray(state.submittedIsbns)) state.submittedIsbns = [];
+
+  let filledPage1 = false;
+  let filledPage2 = false;
+  let lastScrolledKey = "";
+  let pendingUsedKey = "";
+
+  function resetFillFlags() {
+    filledPage1 = false;
+    filledPage2 = false;
+    lastScrolledKey = "";
+  }
+
+  function markBookUsed(book) {
+    if (!book) return;
+    const title = book.title;
+    const isbn = book.isbn;
+    if (!state.submittedTitles.includes(title)) {
+      state.submittedTitles.push(title);
+    }
+    if (isbn && !state.submittedIsbns.includes(isbn)) {
+      state.submittedIsbns.push(isbn);
+    }
+    saveState();
+    applyFilters();
+    renderBookSelect();
+  }
 
   function saveState() {
     safeSetStoredState({
@@ -598,31 +624,93 @@
     return true;
   }
 
-  function fillDomMode() {
-    const rawBook = currentBook();
-    if (!rawBook) {
-      setStatus("请先选择一本图书！", true);
-      return;
+  function clickButtonByText(text) {
+    const btn = Array.from(document.querySelectorAll("button, span, div, p"))
+      .find((el) => !isInsidePanel(el) && (el.textContent || "").trim().includes(text));
+
+    if (!btn) return false;
+    btn.scrollIntoView({ behavior: "auto", block: "center" });
+    setTimeout(() => btn.click(), 150);
+    return true;
+  }
+
+  // --- Exact V1 Scroller ---
+  function scrollToBottomHard() {
+    const doScroll = () => {
+      window.scrollTo({
+        top: document.documentElement.scrollHeight || document.body.scrollHeight,
+        behavior: "auto"
+      });
+      document.documentElement.scrollTop = document.documentElement.scrollHeight;
+      document.body.scrollTop = document.body.scrollHeight;
+
+      const ionicContainers = document.querySelectorAll(
+        "ion-content, .ion-content-scroll-host, .scroll-content, [class*='content-scroll'], main, [role='main']"
+      );
+      ionicContainers.forEach(el => {
+        if (el.scrollToBottom) el.scrollToBottom(0);
+        else el.scrollTop = el.scrollHeight;
+      });
+
+      const scrollers = Array.from(document.querySelectorAll("div, section, article"))
+        .filter(el => !isInsidePanel(el) && el.scrollHeight > el.clientHeight + 50);
+      scrollers.forEach(el => {
+        el.scrollTop = el.scrollHeight;
+      });
+    };
+    setTimeout(doScroll, 100);
+    setTimeout(doScroll, 400);
+    setTimeout(doScroll, 800);
+  }
+
+  function scrollToBottomOnce(key) {
+    if (lastScrolledKey === key) return;
+    lastScrolledKey = key;
+    scrollToBottomHard();
+  }
+
+  // --- Exact V1 Form Auto-Filler ---
+  function fillVisibleForm(force = false) {
+    if (force) {
+      resetFillFlags();
     }
 
-    try {
-      const langName = nilamLanguageName(rawBook.language);
+    const btnPasti = Array.from(document.querySelectorAll("button, span, div"))
+      .find((el) => !isInsidePanel(el) && (el.textContent || "").trim().includes("Pasti"));
 
-      // Check Page 1: #title element exists
-      const titleEl = document.getElementById("title");
-      if (titleEl) {
-        const bookData = {
-          date: state.selectedDate,
-          title: rawBook.title,
-          pages: rawBook.pages,
-          isbn: rawBook.isbn,
-          author: rawBook.author,
-          publisher: rawBook.publisher,
-          year: rawBook.year,
-          category: rawBook.category,
-          language: langName
-        };
+    if (btnPasti) {
+      btnPasti.click();
+      const pendingBook = state.books.find((book) => bookKey(book) === pendingUsedKey);
+      if (pendingBook) markBookUsed(pendingBook);
+      else {
+        const cur = currentBook();
+        if (cur) markBookUsed(cur);
+      }
+      pendingUsedKey = "";
+      return true;
+    }
 
+    const rawBook = currentBook();
+    if (!rawBook) return false;
+
+    const langName = nilamLanguageName(rawBook.language);
+    const bookData = {
+      date: state.selectedDate,
+      title: rawBook.title,
+      pages: rawBook.pages,
+      isbn: rawBook.isbn,
+      author: rawBook.author,
+      publisher: rawBook.publisher,
+      year: rawBook.year,
+      category: rawBook.category,
+      language: langName,
+      rumusan: rawBook.rumusan,
+      lesson: rawBook.lesson
+    };
+
+    if (document.getElementById("title")) {
+      if (!filledPage1) {
+        filledPage1 = true;
         fillDate(bookData);
         setValue(document.getElementById("title"), bookData.title);
         setValue(document.getElementById("noOfPage"), bookData.pages);
@@ -635,35 +723,52 @@
         selectDropdownByText(0, bookData.category);
         selectDropdownByText(1, langName);
 
-        // Mark book as used & advance pointer
-        state.submittedTitles.push(rawBook.title);
-        state.submittedIsbns.push(rawBook.isbn);
-        saveState();
-        applyFilters();
-        renderBookSelect();
-
-        setStatus(`📝 第一页《${rawBook.title}》已成功自动填入！已选 [${rawBook.category}] 与 [${langName}]。请点击【Seterusnya】。`);
-        return;
+        setStatus(`📝 第一页已自动填入《${bookData.title}》！已选 [${bookData.category}] 与 [${langName}]`);
+        setTimeout(() => clickButtonByText("Seterusnya"), 700);
       }
+      return true;
+    }
 
-      // Check Page 2: #summary element exists
-      const summaryEl = document.getElementById("summary");
-      if (summaryEl) {
+    if (document.getElementById("summary")) {
+      if (!filledPage2) {
+        filledPage2 = true;
         setValue(document.getElementById("summary"), rawBook.rumusan);
         setValue(document.getElementById("review"), rawBook.lesson);
-
+        setStatus("📝 第二页已自动填入故事摘要与道德启示，正在选中星级...");
         setTimeout(() => {
           forceClickFifthStar();
-        }, 300);
-
-        setStatus(`📝 第二页已成功自动填入 Rumusan 与 Pengajaran，并选中 5 星好评！请点击【Hantar】。`);
-        return;
+          scrollToBottomHard();
+        }, 500);
       }
-
-      setStatus("⚠️ 未能在页面上找到 AINS 书籍表单的 title 或 summary 元素。请确认在添加书籍页面！", true);
-    } catch (e) {
-      setStatus(`DOM 填表失败: ${e.message}`, true);
+      forceClickFifthStar();
+      return true;
     }
+
+    // Page 3/4: detect action buttons and scroll to bottom once per page
+    const buttons = Array.from(document.querySelectorAll("button, span, div, p"));
+    const hasHantar = buttons.some((el) => {
+      const t = (el.textContent || "").trim();
+      return t === "Hantar" || t === "Simpan";
+    });
+    const hasSeterusnya = buttons.some((el) => {
+      const t = (el.textContent || "").trim();
+      return t === "Seterusnya";
+    });
+
+    if (hasHantar) {
+      pendingUsedKey = bookKey(rawBook);
+      scrollToBottomOnce(`hantar-${state.selectedKey}`);
+      return true;
+    } else if (hasSeterusnya) {
+      scrollToBottomOnce(`seterusnya-${state.selectedKey}`);
+      return true;
+    }
+
+    return false;
+  }
+
+  function fillDomMode() {
+    fillVisibleForm(true);
   }
 
   function diagnosePage() {
@@ -826,6 +931,7 @@
       if (e.target.id === "nih-language") state.filters.language = e.target.value;
       if (e.target.id === "nih-date") state.selectedDate = normalizeIsoDate(e.target.value);
       if (e.target.id === "nih-book") state.selectedKey = e.target.value;
+      resetFillFlags();
       applyFilters();
       renderBookSelect();
       saveState();
@@ -846,6 +952,7 @@
         document.querySelector("#nih-tab-api").classList.remove("active");
         document.querySelector("#nih-content-dom").style.display = "block";
         document.querySelector("#nih-content-api").style.display = "none";
+        resetFillFlags();
         saveState();
       }
       if (e.target.closest("#nih-btn-submit-api")) await submitApi();
@@ -880,7 +987,10 @@
       if (!document.getElementById(PANEL_ID) && document.body) {
         createPanel();
       }
-    }, 1000);
+      if (state.activeTab === "dom") {
+        fillVisibleForm();
+      }
+    }, 700);
 
     // Sync AINS history once after a short delay (not on every tick)
     setTimeout(() => {
