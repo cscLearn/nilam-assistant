@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.4
+// @version      1.1.5
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.1.4";
+  const SCRIPT_VERSION = "1.1.5";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   const consoleLogs = [];
@@ -1012,7 +1012,7 @@
           </div>
         </div>
 
-        <div class="nih-status" id="nia-status">准备就绪（题库：18,000 本）</div>
+        <div class="nih-status" id="nia-status" style="cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px;" title="点击强制刷新 AINS 历史记录">准备就绪（题库：18,000 本） 🔄</div>
         <div id="nih-log-box" style="margin-top:6px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:9px;padding:6px;border-radius:6px;max-height:80px;overflow-y:auto;text-align:left;display:none;font-family:monospace;"></div>
       </div>
     `;
@@ -1091,6 +1091,10 @@
         state.collapsed = !state.collapsed;
         document.querySelector("#nih-body-content").style.display = state.collapsed ? "none" : "block";
         saveState();
+      }
+      if (e.target.closest("#nia-status")) {
+        setStatus("正在强制刷新同步 AINS 历史记录...");
+        fetchAinsHistory();
       }
     });
   }
