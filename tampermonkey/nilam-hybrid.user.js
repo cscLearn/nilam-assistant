@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.3
+// @version      1.0.4
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.3";
+  const SCRIPT_VERSION = "1.0.4";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -444,160 +444,102 @@
     }
   }
 
+  function nilamLanguageName(lang) {
+    if (lang === "zh") return "Bahasa Cina";
+    if (lang === "en") return "Bahasa Inggeris";
+    return "Bahasa Melayu";
+  }
+
+  function selectDropdownByText(selectIndex, targetText) {
+    const allSelects = Array.from(document.querySelectorAll("select")).filter(el => !isInsidePanel(el));
+    const selectEl = allSelects[selectIndex];
+    if (!selectEl || !targetText) return false;
+
+    const opt = Array.from(selectEl.options).find((option) =>
+      option.textContent.trim().toLowerCase().includes(targetText.toLowerCase())
+    );
+
+    if (!opt) return false;
+
+    selectEl.value = opt.value;
+    selectEl.selectedIndex = opt.index;
+    selectEl.dispatchEvent(new Event("input", { bubbles: true }));
+    selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
   function forceClickFifthStar() {
-    try {
-      const stars = Array.from(document.querySelectorAll("svg, [class*='star' i]"))
-        .filter(svg => !isInsidePanel(svg) && svg.outerHTML.includes("fa-star"));
-      if (stars.length >= 5) {
-        const fifthStar = stars[4];
-        fifthStar.scrollIntoView({ behavior: "auto", block: "center" });
-        ["mousedown", "mouseup", "click"].forEach(type => {
-          fifthStar.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
-        });
-        fifthStar.click?.();
-        let parent = fifthStar.parentElement;
-        for (let i = 0; parent && i < 3; i++, parent = parent.parentElement) {
-          if (parent.matches('button, label, [role="button"], span, div')) { parent.click(); break; }
+    // Strategy 1: Find SVGs with fa-star in outerHTML (matches NILAM's actual DOM)
+    const stars = Array.from(document.querySelectorAll("svg"))
+      .filter(svg => !isInsidePanel(svg) && svg.outerHTML.includes("fa-star"));
+
+    if (stars.length >= 5) {
+      const fifthStar = stars[4];
+      fifthStar.scrollIntoView({ behavior: "auto", block: "center" });
+
+      ["mousedown", "mouseup", "click"].forEach(type => {
+        fifthStar.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        }));
+      });
+
+      let parent = fifthStar.parentElement;
+      for (let i = 0; parent && i < 3; i++, parent = parent.parentElement) {
+        if (parent.matches('button, label, [role="button"], span, div')) {
+          parent.click();
+          break;
         }
-        return true;
       }
-    } catch (e) {
-      console.warn("forceClickFifthStar error:", e);
+      return true;
     }
     return false;
   }
 
-  function fillSummaryAndLesson(book) {
-    let filled = 0;
-
-    // Method 1: Target by explicit labels
-    const labels = Array.from(document.querySelectorAll("label")).filter(l => !isInsidePanel(l));
-    labels.forEach(label => {
-      const txt = (label.textContent || "").toLowerCase();
-      const input = label.control || label.nextElementSibling?.querySelector("textarea, input") || label.parentElement?.querySelector("textarea, input");
-      if (input && !isInsidePanel(input)) {
-        if (txt.includes("pengajaran") || txt.includes("moral") || txt.includes("ikhtibar") || txt.includes("lesson")) {
-          if (setValueSafely(input, book.lesson)) filled++;
-        } else if (txt.includes("rumusan") || txt.includes("summary") || txt.includes("ringkasan")) {
-          if (setValueSafely(input, book.rumusan)) filled++;
-        }
-      }
-    });
-
-    // Method 2: Target textareas by DOM order if labels didn't fill both
-    const textareas = Array.from(document.querySelectorAll("textarea, [contenteditable='true']")).filter(el => !isInsidePanel(el));
-    if (textareas.length >= 2) {
-      if (setValueSafely(textareas[0], book.rumusan)) filled++;
-      if (setValueSafely(textareas[1], book.lesson)) filled++;
-    } else if (textareas.length === 1 && filled === 0) {
-      const el = textareas[0];
-      const name = `${el.id} ${el.name} ${el.placeholder} ${el.getAttribute("aria-label") || ""}`.toLowerCase();
-      if (name.includes("pengajaran") || name.includes("lesson") || name.includes("moral")) {
-        setValueSafely(el, book.lesson);
-      } else {
-        setValueSafely(el, book.rumusan);
-      }
-      filled++;
-    }
-
-    return filled;
-  }
-
-  let page2Watcher = null;
-  function watchAndFillPage2(book) {
-    if (page2Watcher) clearInterval(page2Watcher);
-    let attempts = 0;
-    page2Watcher = setInterval(() => {
-      attempts++;
-      const filled = fillSummaryAndLesson(book);
-      const clickedStar = forceClickFifthStar();
-      if ((filled >= 2 && clickedStar) || attempts > 40) {
-        clearInterval(page2Watcher);
-        page2Watcher = null;
-      }
-    }, 400);
-  }
-
   function fillDomMode() {
-    const book = currentBook();
-    if (!book) {
+    const rawBook = currentBook();
+    if (!rawBook) {
       setStatus("请先选择一本图书！", true);
       return;
     }
 
     try {
-      let filledCount = 0;
-      const pageInputs = Array.from(document.querySelectorAll("input")).filter(el => !isInsidePanel(el));
+      const langName = nilamLanguageName(rawBook.language);
 
-      pageInputs.forEach((el) => {
-        const id = (el.id || "").toLowerCase();
-        const name = (el.name || el.placeholder || "").toLowerCase();
+      // Check Page 1: #title element exists
+      const titleEl = document.getElementById("title");
+      if (titleEl) {
+        setValueSafely(document.getElementById("title"), rawBook.title);
+        setValueSafely(document.getElementById("noOfPage"), rawBook.pages);
+        setValueSafely(document.getElementById("isbn"), rawBook.isbn);
+        setValueSafely(document.getElementById("author"), rawBook.author);
+        setValueSafely(document.getElementById("publisher"), rawBook.publisher);
+        setValueSafely(document.getElementById("publishedYear"), rawBook.year);
 
-        if (id === "title" || name.includes("tajuk") || name.includes("title")) {
-          if (setValueSafely(el, book.title)) filledCount++;
-        } else if (id === "author" || name.includes("penulis") || name.includes("author")) {
-          if (setValueSafely(el, book.author)) filledCount++;
-        } else if (id === "publisher" || name.includes("penerbit") || name.includes("publisher")) {
-          if (setValueSafely(el, book.publisher)) filledCount++;
-        } else if (id === "publishedyear" || name.includes("tahun") || name.includes("year")) {
-          if (setValueSafely(el, String(book.year))) filledCount++;
-        } else if (id === "noofpage" || name.includes("muka") || name.includes("page")) {
-          if (setValueSafely(el, String(book.pages))) filledCount++;
-        } else if (id === "isbn" || name.includes("isbn")) {
-          if (setValueSafely(el, book.isbn)) filledCount++;
-        }
-      });
+        document.getElementById("typephysical")?.click();
+        selectDropdownByText(0, rawBook.category);
+        selectDropdownByText(1, langName);
 
-      // Auto-fill Select Dropdowns (Category & Bahasa/Language)
-      const langKeywords = {
-        bm: ["bahasa melayu", "melayu", "bahasa malaysia", "bm"],
-        en: ["bahasa inggeris", "inggeris", "english", "bi"],
-        zh: ["bahasa cina", "cina", "chinese", "bc"]
-      };
-      const targetLangs = langKeywords[book.language] || langKeywords.bm;
-      const targetCat = book.category === "Fiksyen" ? "fiksyen" : "bukan fiksyen";
-
-      const selects = Array.from(document.querySelectorAll("select, ion-select")).filter(el => !isInsidePanel(el));
-      selects.forEach(selectEl => {
-        if (selectEl.options) {
-          const outerText = (selectEl.outerHTML || "").toLowerCase();
-          const idName = `${selectEl.id} ${selectEl.name} ${selectEl.getAttribute("aria-label") || ""}`.toLowerCase();
-
-          let matchedOpt = null;
-          if (idName.includes("bahasa") || idName.includes("language") || outerText.includes("bahasa")) {
-            matchedOpt = Array.from(selectEl.options).find(o => targetLangs.some(l => (o.textContent || "").toLowerCase().includes(l)));
-          } else if (idName.includes("kategori") || idName.includes("category") || outerText.includes("kategori")) {
-            matchedOpt = Array.from(selectEl.options).find(o => (o.textContent || "").toLowerCase().includes(targetCat));
-          } else {
-            matchedOpt = Array.from(selectEl.options).find(o => {
-              const txt = (o.textContent || "").toLowerCase();
-              return targetLangs.some(l => txt.includes(l)) || txt.includes(targetCat);
-            });
-          }
-
-          if (matchedOpt) {
-            selectEl.value = matchedOpt.value;
-            selectEl.selectedIndex = matchedOpt.index;
-            selectEl.dispatchEvent(new Event("input", { bubbles: true }));
-            selectEl.dispatchEvent(new Event("change", { bubbles: true }));
-            filledCount++;
-          }
-        }
-      });
-
-      // Fill Page 2 (Rumusan, Pengajaran, 5 Stars) immediately if available
-      const p2Filled = fillSummaryAndLesson(book);
-      const clickedStar = forceClickFifthStar();
-      filledCount += p2Filled;
-
-      // Enable Background Watcher so Page 2 fills automatically when user clicks Next (Seterusnya)
-      watchAndFillPage2(book);
-
-      if (filledCount > 0) {
-        setStatus(`📝 第一页已填完！进入第二页时会自动填入 Rumusan、Pengajaran 与 5星好评！`);
-      } else {
-        setStatus("⚠️ 未能定位到原生表单，请确认您已打开 AINS 系统的填表页面！", true);
+        setStatus(`📝 第一页《${rawBook.title}》已自动填入！已选 [${rawBook.category}] 与 [${langName}]。请点击【Seterusnya】。`);
+        return;
       }
+
+      // Check Page 2: #summary element exists
+      const summaryEl = document.getElementById("summary");
+      if (summaryEl) {
+        setValueSafely(document.getElementById("summary"), rawBook.rumusan);
+        setValueSafely(document.getElementById("review"), rawBook.lesson);
+
+        setTimeout(() => {
+          forceClickFifthStar();
+        }, 300);
+
+        setStatus(`📝 第二页已自动填入 Rumusan 与 Pengajaran，并选中 5 星好评！请点击【Hantar】。`);
+        return;
+      }
+
+      setStatus("⚠️ 请在 AINS 页面点击【Seterusnya】或【Tambah Buku】以开始填表。", true);
     } catch (e) {
       setStatus(`DOM 填表失败: ${e.message}`, true);
     }
