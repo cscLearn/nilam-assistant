@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.2
+// @version      1.0.3
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.2";
+  const SCRIPT_VERSION = "1.0.3";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -445,17 +445,77 @@
   }
 
   function forceClickFifthStar() {
-    const stars = Array.from(document.querySelectorAll("svg"))
-      .filter(svg => !isInsidePanel(svg) && svg.outerHTML.includes("fa-star"));
-    if (stars.length >= 5) {
-      const fifthStar = stars[4];
-      fifthStar.scrollIntoView({ behavior: "auto", block: "center" });
-      ["mousedown", "mouseup", "click"].forEach(type => {
-        fifthStar.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-      });
-      return true;
+    try {
+      const stars = Array.from(document.querySelectorAll("svg, [class*='star' i]"))
+        .filter(svg => !isInsidePanel(svg) && svg.outerHTML.includes("fa-star"));
+      if (stars.length >= 5) {
+        const fifthStar = stars[4];
+        fifthStar.scrollIntoView({ behavior: "auto", block: "center" });
+        ["mousedown", "mouseup", "click"].forEach(type => {
+          fifthStar.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
+        });
+        fifthStar.click?.();
+        let parent = fifthStar.parentElement;
+        for (let i = 0; parent && i < 3; i++, parent = parent.parentElement) {
+          if (parent.matches('button, label, [role="button"], span, div')) { parent.click(); break; }
+        }
+        return true;
+      }
+    } catch (e) {
+      console.warn("forceClickFifthStar error:", e);
     }
     return false;
+  }
+
+  function fillSummaryAndLesson(book) {
+    let filled = 0;
+
+    // Method 1: Target by explicit labels
+    const labels = Array.from(document.querySelectorAll("label")).filter(l => !isInsidePanel(l));
+    labels.forEach(label => {
+      const txt = (label.textContent || "").toLowerCase();
+      const input = label.control || label.nextElementSibling?.querySelector("textarea, input") || label.parentElement?.querySelector("textarea, input");
+      if (input && !isInsidePanel(input)) {
+        if (txt.includes("pengajaran") || txt.includes("moral") || txt.includes("ikhtibar") || txt.includes("lesson")) {
+          if (setValueSafely(input, book.lesson)) filled++;
+        } else if (txt.includes("rumusan") || txt.includes("summary") || txt.includes("ringkasan")) {
+          if (setValueSafely(input, book.rumusan)) filled++;
+        }
+      }
+    });
+
+    // Method 2: Target textareas by DOM order if labels didn't fill both
+    const textareas = Array.from(document.querySelectorAll("textarea, [contenteditable='true']")).filter(el => !isInsidePanel(el));
+    if (textareas.length >= 2) {
+      if (setValueSafely(textareas[0], book.rumusan)) filled++;
+      if (setValueSafely(textareas[1], book.lesson)) filled++;
+    } else if (textareas.length === 1 && filled === 0) {
+      const el = textareas[0];
+      const name = `${el.id} ${el.name} ${el.placeholder} ${el.getAttribute("aria-label") || ""}`.toLowerCase();
+      if (name.includes("pengajaran") || name.includes("lesson") || name.includes("moral")) {
+        setValueSafely(el, book.lesson);
+      } else {
+        setValueSafely(el, book.rumusan);
+      }
+      filled++;
+    }
+
+    return filled;
+  }
+
+  let page2Watcher = null;
+  function watchAndFillPage2(book) {
+    if (page2Watcher) clearInterval(page2Watcher);
+    let attempts = 0;
+    page2Watcher = setInterval(() => {
+      attempts++;
+      const filled = fillSummaryAndLesson(book);
+      const clickedStar = forceClickFifthStar();
+      if ((filled >= 2 && clickedStar) || attempts > 40) {
+        clearInterval(page2Watcher);
+        page2Watcher = null;
+      }
+    }, 400);
   }
 
   function fillDomMode() {
@@ -467,7 +527,7 @@
 
     try {
       let filledCount = 0;
-      const pageInputs = Array.from(document.querySelectorAll("input, textarea")).filter(el => !isInsidePanel(el));
+      const pageInputs = Array.from(document.querySelectorAll("input")).filter(el => !isInsidePanel(el));
 
       pageInputs.forEach((el) => {
         const id = (el.id || "").toLowerCase();
@@ -485,8 +545,6 @@
           if (setValueSafely(el, String(book.pages))) filledCount++;
         } else if (id === "isbn" || name.includes("isbn")) {
           if (setValueSafely(el, book.isbn)) filledCount++;
-        } else if (el.tagName === "TEXTAREA" || name.includes("summary") || name.includes("rumusan")) {
-          if (setValueSafely(el, book.rumusan)) filledCount++;
         }
       });
 
@@ -527,10 +585,16 @@
         }
       });
 
-      forceClickFifthStar();
+      // Fill Page 2 (Rumusan, Pengajaran, 5 Stars) immediately if available
+      const p2Filled = fillSummaryAndLesson(book);
+      const clickedStar = forceClickFifthStar();
+      filledCount += p2Filled;
+
+      // Enable Background Watcher so Page 2 fills automatically when user clicks Next (Seterusnya)
+      watchAndFillPage2(book);
 
       if (filledCount > 0) {
-        setStatus(`📝 已成功自动将《${book.title}》填入网页！请点击网页底部的『Hantar』提交。`);
+        setStatus(`📝 第一页已填完！进入第二页时会自动填入 Rumusan、Pengajaran 与 5星好评！`);
       } else {
         setStatus("⚠️ 未能定位到原生表单，请确认您已打开 AINS 系统的填表页面！", true);
       }
