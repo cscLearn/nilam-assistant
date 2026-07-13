@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.6
+// @version      1.0.7
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.6";
+  const SCRIPT_VERSION = "1.0.7";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -674,6 +674,38 @@
   }
 
 
+  // ── Diagnostic: reports what elements are visible on current page ──
+  function diagnosePage() {
+    const all = Array.from(document.querySelectorAll(
+      "input, textarea, select, ion-input, ion-textarea, ion-select, [contenteditable='true']"
+    )).filter(el => !isInsidePanel(el));
+
+    if (all.length === 0) {
+      setStatus("⚠️ 诊断：页面上找不到任何输入字段！请确认在填表页面。", true);
+      return;
+    }
+
+    const lines = all.map(el => {
+      const tag  = el.tagName.toLowerCase();
+      const id   = el.id || "-";
+      const name = el.name || el.getAttribute("name") || "-";
+      const ph   = el.placeholder || el.getAttribute("placeholder") || "-";
+      const lbl  = el.closest("ion-item, .form-group, div")?.querySelector("ion-label, label")?.textContent?.trim() || "-";
+      return `[${tag}] id=${id} name=${name} ph=${ph} label=${lbl}`;
+    });
+
+    console.log("=== NILAM DOM Diagnostic ===");
+    lines.forEach(l => console.log(l));
+
+    // Show summary in status bar
+    const tags = all.map(el => el.tagName.toLowerCase());
+    const summary = [...new Set(tags)].join(", ");
+    setStatus(`🔍 诊断：找到 ${all.length} 个字段 [${summary}]。详见 F12 Console。`);
+
+    // Also alert first 5 for quick inspection
+    alert("NILAM诊断 (前5个字段):\n" + lines.slice(0, 5).join("\n") + (lines.length > 5 ? `\n...共${lines.length}个，其余见F12 Console` : ""));
+  }
+
   function createPanel() {
     if (document.getElementById(PANEL_ID)) return;
     const panel = document.createElement("div");
@@ -766,8 +798,9 @@
         <!-- Tab 2: DOM Content -->
         <div id="nih-content-dom" style="display: ${state.activeTab === "dom" ? "block" : "none"};">
           <button class="nih-btn nih-btn-primary" id="nih-btn-fill-dom">自动填入网页输入框</button>
+          <button class="nih-btn nih-btn-secondary" id="nih-btn-diag" style="margin-top:4px;background:#6b7280;">🔍 诊断页面元素</button>
           <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">
-            💡 说明：已将图书填入原生输入框。填完后请点击 AINS 网页下方的『Hantar』按钮手工提交。
+            💡 说明：先点诊断确认找到字段，再点填入。填完后请点击 AINS 网页下方的『Hantar』按钮手工提交。
           </div>
         </div>
 
@@ -842,6 +875,7 @@
       }
       if (e.target.id === "nih-btn-submit-api") await submitApi();
       if (e.target.id === "nih-btn-fill-dom") fillDomMode();
+      if (e.target.id === "nih-btn-diag") diagnosePage();
       if (e.target.id === "nih-toggle") {
         state.collapsed = !state.collapsed;
         document.querySelector("#nih-body-content").style.display = state.collapsed ? "none" : "block";
@@ -871,10 +905,12 @@
       if (!document.getElementById(PANEL_ID) && document.body) {
         createPanel();
       }
-      if (state.authHeader && state.userId) {
-        fetchAinsHistory();
-      }
-    }, 10000);
+    }, 1000);
+
+    // Sync AINS history once after a short delay (not on every tick)
+    setTimeout(() => {
+      if (state.authHeader && state.userId) fetchAinsHistory();
+    }, 3000);
   }
 
   main();
