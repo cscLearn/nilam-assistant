@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.0
+// @version      1.1.1
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,8 +22,62 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.1.0";
+  const SCRIPT_VERSION = "1.1.1";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
+
+  const consoleLogs = [];
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+
+  console.error = function (...args) {
+    originalError.apply(console, args);
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    addLocalLog("🔴 " + msg);
+  };
+
+  console.warn = function (...args) {
+    originalWarn.apply(console, args);
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    addLocalLog("🟡 " + msg);
+  };
+
+  console.log = function (...args) {
+    originalLog.apply(console, args);
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    if (msg.includes("NILAM") || msg.includes("DOM") || msg.includes("API") || msg.includes("fetch") || msg.includes("filled") || msg.includes("History")) {
+      addLocalLog("ℹ️ " + msg);
+    }
+  };
+
+  window.addEventListener("error", (e) => {
+    addLocalLog("❌ Runtime: " + e.message + " at " + e.filename + ":" + e.lineno);
+  });
+
+  window.addEventListener("unhandledrejection", (e) => {
+    addLocalLog("❌ Promise: " + (e.reason?.message || e.reason));
+  });
+
+  function addLocalLog(msg) {
+    consoleLogs.push(msg);
+    if (consoleLogs.length > 5) consoleLogs.shift();
+    renderLocalLogs();
+  }
+
+  function renderLocalLogs() {
+    const el = document.querySelector("#nih-log-box");
+    if (!el) return;
+    el.style.display = consoleLogs.length > 0 ? "block" : "none";
+    el.innerHTML = consoleLogs.map(log => `<div style="margin-bottom:3px;white-space:pre-wrap;word-break:break-all;">${escapeHtml(log)}</div>`).join('');
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
   const FALLBACK_BOOKS = [
@@ -676,10 +730,27 @@
     }
 
     const btnPasti = Array.from(document.querySelectorAll("button, span, div"))
-      .find((el) => !isInsidePanel(el) && (el.textContent || "").trim().includes("Pasti"));
+      .find((el) => {
+        if (isInsidePanel(el)) return false;
+        const text = (el.textContent || "").trim().toLowerCase();
+        return text === "pasti" || text === "ya, hantar" || text === "ya";
+      });
 
     if (btnPasti) {
-      btnPasti.click();
+      let clickable = btnPasti;
+      for (let i = 0; clickable && i < 3; i++) {
+        if (clickable.tagName === "BUTTON" || clickable.tagName === "ION-BUTTON" || clickable.getAttribute("role") === "button") {
+          break;
+        }
+        clickable = clickable.parentElement;
+      }
+      if (!clickable) clickable = btnPasti;
+
+      clickable.click();
+      ["mousedown", "mouseup", "click"].forEach(type => {
+        clickable.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+      });
+
       const pendingBook = state.books.find((book) => bookKey(book) === pendingUsedKey);
       if (pendingBook) markBookUsed(pendingBook);
       else {
@@ -687,6 +758,7 @@
         if (cur) markBookUsed(cur);
       }
       pendingUsedKey = "";
+      resetFillFlags();
       return true;
     }
 
@@ -885,6 +957,7 @@
         </div>
 
         <div class="nih-status" id="nia-status">准备就绪（题库：18,000 本）</div>
+        <div id="nih-log-box" style="margin-top:6px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:9px;padding:6px;border-radius:6px;max-height:80px;overflow-y:auto;text-align:left;display:none;font-family:monospace;"></div>
       </div>
     `;
 
