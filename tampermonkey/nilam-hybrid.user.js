@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.1
+// @version      1.1.2
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.1.1";
+  const SCRIPT_VERSION = "1.1.2";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   const consoleLogs = [];
@@ -635,8 +635,7 @@
       ["mousedown", "mouseup", "click"].forEach(type => {
         fifthStar.dispatchEvent(new MouseEvent(type, {
           bubbles: true,
-          cancelable: true,
-          view: window
+          cancelable: true
         }));
       });
 
@@ -748,7 +747,7 @@
 
       clickable.click();
       ["mousedown", "mouseup", "click"].forEach(type => {
-        clickable.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        clickable.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
       });
 
       const pendingBook = state.books.find((book) => bookKey(book) === pendingUsedKey);
