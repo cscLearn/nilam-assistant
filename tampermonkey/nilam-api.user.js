@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.8.1
+// @version      0.8.2
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
@@ -22,13 +22,13 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.8.1";
+  const SCRIPT_VERSION = "0.8.2";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
   const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
   const WORKER_URL = String(GM_getValue("nilam_worker_url", "https://nilam-book.cscflow.com") || localStorage.getItem("nilam_worker_url") || "https://nilam-book.cscflow.com").replace(/\/+$/, "");
   const WORKER_TOKEN = String(GM_getValue("nilam_worker_token", "sk-nilambooks-fc62df67e2d7d8a9") || localStorage.getItem("nilam_worker_token") || "sk-nilambooks-fc62df67e2d7d8a9").trim();
-  const PROVIDER_SECRET = "51240360a373ff255b719468926955a127f8a37912a20dc3e32e5da25cbeaa2b";
+  const PROVIDER_SECRET = "OypAJ9vA==,OJEpNYuu2h";
   const PROVIDER_ENTRY_ORDER = [
     "user",
     "type",

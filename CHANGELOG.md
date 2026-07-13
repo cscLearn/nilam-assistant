@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2 - 2026-07-13
+
+- Revert `PROVIDER_SECRET` to `OypAJ9vA==,OJEpNYuu2h`. Commit `9b19d2c` (v0.7.2, 2026-07-12) swapped it for a different guessed value that was never actually confirmed against a real server-verified submission, and every version since (through v0.8.1) inherited the wrong key. The known-good v0.5.23/v0.5.26/`nilam-server.user.js` v0.6.0 line — confirmed by the user to submit records that actually show up in AINS history — all use the original key. If AINS backend verifies this signature server-side, the wrong key would explain "success" responses (HTTP 200) that never surface as real records, independent of the v0.8.0 missing-relations bug fixed in 0.8.1.
+
 ## 0.8.1 - 2026-07-13
 
 - Fix orphan-record bug from v0.8.0: stop auto-constructing a submit template with only `user` and no `student`/`school`/`class` — Strapi accepted it (HTTP 200) but the record was never linked to the student, so it never showed up in AINS history after refresh.
