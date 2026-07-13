@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM API Assistant 0.6
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      0.9.1
+// @version      0.9.2
 // @description  Pick a NILAM date and book, then submit through the captured AINS POST API. Prevents duplicates locally.
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-api.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-api-assistant";
   const STORE_KEY = "nilam_api_assistant_state_v3";
-  const SCRIPT_VERSION = "0.9.1";
+  const SCRIPT_VERSION = "0.9.2";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
   const REFRESH_BOOK_COUNT = 30;
   const LANGUAGE_BATCH_COUNTS = { zh: 10, bm: 10, en: 10 };
@@ -1026,7 +1026,9 @@
   // will be rejected — this is the single decisive ground-truth check.
   function verifyCapturedProviderSecret() {
     const data = capturedDataTemplate();
+    lastSelfCheckReport = "";
     if (!data || !data.provider) {
+      lastSelfCheckReport = "自检：捕获的模板里没有 provider 字段。";
       console.warn("NILAM API Assistant: provider secret self-check -> no provider field in captured template");
       return null;
     }
@@ -1034,24 +1036,37 @@
     try {
       decrypted = decryptProvider(data.provider);
     } catch (error) {
+      lastSelfCheckReport = `自检：用当前密钥解密真实 provider 失败 -> 密钥错误。(${error.message})`;
       console.error("NILAM API Assistant: provider secret self-check -> DECRYPT FAILED (secret is WRONG):", error.message);
       return false;
     }
     if (!decrypted) {
+      lastSelfCheckReport = "自检：解密真实 provider 得到空结果 -> 密钥错误。";
       console.error("NILAM API Assistant: provider secret self-check -> decrypt returned empty (secret is WRONG)");
       return false;
     }
+    // Dump BOTH the captured (website-built) data values and the decrypted
+    // provider values, per provider entry, so the exact encoding the AINS server
+    // expects is visible without opening devtools.
+    const lines = ["=== provider 自检（真实截获 vs 解密 provider）==="];
     const mismatches = [];
-    for (const key of PROVIDER_ENTRY_ORDER) {
-      if (normalizeComparable(data[key]) !== normalizeComparable(decrypted[key])) {
-        mismatches.push({ key, body: data[key], provider: decrypted[key] });
-      }
+    PROVIDER_ENTRY_ORDER.forEach((key, index) => {
+      const bodyVal = data[key];
+      const provVal = decrypted[key];
+      const match = normalizeComparable(bodyVal) === normalizeComparable(provVal);
+      if (!match) mismatches.push({ index, key });
+      lines.push(`${match ? "OK " : "XX "}entry ${index} ${key}: data=${JSON.stringify(bodyVal)} provider=${JSON.stringify(provVal)}`);
+    });
+    lines.push("=== 真实截获 data 关键字段 ===");
+    for (const key of ["type", "bookType", "category", "language", "rating", "reviewIsVideo", "user", "student", "school", "class", "noOfPage", "publishedYear"]) {
+      if (Object.hasOwn(data, key)) lines.push(`${key} = ${JSON.stringify(data[key])}`);
     }
+    lastSelfCheckReport = lines.join("\n");
     if (mismatches.length) {
-      console.error("NILAM API Assistant: provider secret self-check -> FIELD MISMATCH (secret likely wrong or field order differs):", mismatches, { capturedData: data, decryptedProvider: decrypted });
+      console.error("NILAM API Assistant: provider secret self-check -> FIELD MISMATCH:", mismatches, { capturedData: data, decryptedProvider: decrypted });
       return false;
     }
-    console.log("NILAM API Assistant: provider secret self-check -> MATCH ✅ (secret correct; API submit should be accepted).", { capturedData: data });
+    console.log("NILAM API Assistant: provider secret self-check -> MATCH (secret correct).", { capturedData: data, decryptedProvider: decrypted });
     return true;
   }
 
@@ -1401,6 +1416,7 @@
   // ===========================================================================
 
   const capture = { active: false, loopId: null, bookKey: "", filledPage1: false, filledPage2: false, lastScrolledKey: "", startedAt: 0 };
+  let lastSelfCheckReport = "";
 
   function isInsidePanel(el) {
     return el && el.closest && el.closest("#" + PANEL_ID);
@@ -1964,7 +1980,19 @@
       if (!response.ok) {
         console.error("NILAM API Assistant: Response Error Detail ->", text);
         setDiagnostics({ ok: false, message: text.slice(0, 260) });
-        alert(`AINS 服务器拒绝了这次 API 提交：\nHTTP ${response.status}\n${text.slice(0, 300)}\n\n（播种那次是网站自己提交的，能成功；如果这次 API 提交被拒，多半是 provider 密钥不一致。请把控制台里 provider secret self-check 日志发给开发者。）`);
+        // Dump our rebuilt payload next to the captured (working) one so the exact
+        // failing field is visible in the "显示捕获的 API 负载" box.
+        try {
+          const sentLines = ["=== 本次 API 提交(被拒)的 data ==="];
+          for (const key of PROVIDER_ENTRY_ORDER) sentLines.push(`${key} = ${JSON.stringify(bodyPayload.data[key])}`);
+          const sentProvider = decryptProvider(bodyPayload.data.provider);
+          sentLines.push("--- 本次 provider 解密 ---");
+          for (const key of PROVIDER_ENTRY_ORDER) sentLines.push(`${key} = ${JSON.stringify(sentProvider?.[key])}`);
+          sentLines.push(`--- 服务器响应 ---\nHTTP ${response.status}: ${text.slice(0, 260)}`);
+          lastSelfCheckReport = `${lastSelfCheckReport}\n\n${sentLines.join("\n")}`.trim();
+          renderApiStatus();
+        } catch (e) { /* ignore dump errors */ }
+        alert(`AINS 服务器拒绝了这次 API 提交：\nHTTP ${response.status}\n${text.slice(0, 300)}\n\n请展开面板底部「显示捕获的 API 负载」，把里面全部内容复制给开发者——它现在包含真实截获与本次提交的逐字段对比。`);
         throw new Error(`HTTP ${response.status}: ${text.slice(0, 240)}`);
       }
 
@@ -2077,9 +2105,10 @@
     }
     const debugEl = document.querySelector("#nia-debug-template");
     if (debugEl) {
-      debugEl.value = state.apiTemplate
+      const raw = state.apiTemplate
         ? (typeof state.apiTemplate.bodyText === "string" ? state.apiTemplate.bodyText : JSON.stringify(state.apiTemplate, null, 2))
         : "暂无捕获的 API 负载。";
+      debugEl.value = lastSelfCheckReport ? `${raw}\n\n${lastSelfCheckReport}` : raw;
     }
     updateCooldownUI();
   }

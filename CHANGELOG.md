@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.2 - 2026-07-13
+
+- Diagnostics for the server-side `"Invalid entry 1"` (HTTP 400) rejection: AINS validates the `provider` signature field-by-field server-side, and entry 1 (`type`) is being rejected. The "显示捕获的 API 负载" box now shows a full per-entry dump of the captured (website-built, working) provider decrypted with our secret, plus — on a failed API submit — the same dump for our rebuilt payload, so the exact field whose encoding diverges is visible without devtools. `entry 0` (`user`) passing server-side implies the secret itself is correct; the mismatch is a per-field encoding difference in how the provider is rebuilt.
+
 ## 0.9.1 - 2026-07-13
 
 - Fix API submit silently doing nothing after a successful capture. The v0.9.0 `missing_relations` guard blocked submission whenever the captured body lacked top-level `student`/`school` — but AINS (Strapi) derives those relations from the authenticated user, so the real website POST legitimately omits them (the seeding submission proved that shape works). Removed the guard; the captured template is now treated as authoritative and only book-specific fields + the re-encrypted provider are swapped.
