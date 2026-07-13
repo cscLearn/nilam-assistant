@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.1.2
+// @version      1.1.3
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.1.2";
+  const SCRIPT_VERSION = "1.1.3";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   const consoleLogs = [];
@@ -77,6 +77,58 @@
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
+  }
+
+  function makeDraggable(el, handle) {
+    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    
+    handle.addEventListener("mousedown", dragMouseDown, { passive: false });
+    handle.addEventListener("touchstart", dragMouseDown, { passive: false });
+
+    function dragMouseDown(e) {
+      const isTouch = e.type === "touchstart";
+      const clientX = isTouch ? e.touches[0].clientX : e.clientX;
+      const clientY = isTouch ? e.touches[0].clientY : e.clientY;
+      
+      pos3 = clientX;
+      pos4 = clientY;
+      
+      if (isTouch) {
+        document.addEventListener("touchend", closeDragElement);
+        document.addEventListener("touchmove", elementDrag, { passive: false });
+      } else {
+        document.addEventListener("mouseup", closeDragElement);
+        document.addEventListener("mousemove", elementDrag);
+      }
+    }
+
+    function elementDrag(e) {
+      const isTouch = e.type === "touchmove";
+      if (isTouch) e.preventDefault();
+      const clientX = isTouch ? e.touches[0].clientX : e.clientX;
+      const clientY = isTouch ? e.touches[0].clientY : e.clientY;
+      
+      pos1 = pos3 - clientX;
+      pos2 = pos4 - clientY;
+      pos3 = clientX;
+      pos4 = clientY;
+      
+      el.style.top = (el.offsetTop - pos2) + "px";
+      el.style.left = (el.offsetLeft - pos1) + "px";
+      el.style.bottom = "auto";
+      el.style.right = "auto";
+    }
+
+    function closeDragElement(e) {
+      const isTouch = e.type === "touchend";
+      if (isTouch) {
+        document.removeEventListener("touchend", closeDragElement);
+        document.removeEventListener("touchmove", elementDrag);
+      } else {
+        document.removeEventListener("mouseup", closeDragElement);
+        document.removeEventListener("mousemove", elementDrag);
+      }
+    }
   }
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
