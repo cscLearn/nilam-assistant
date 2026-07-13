@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.7
+// @version      1.0.8
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.7";
+  const SCRIPT_VERSION = "1.0.8";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -44,6 +44,39 @@
     { id: "fb-zh-2", category: "Bukan Fiksyen", language: "zh", title: "八大行星与地球生态平衡的奥秘", author: "刘文杰", publisher: "接力出版社", year: 2024, pages: 18, isbn: "978-7-5560-6107-5", rumusan: "揭示了八大行星与自然循环在地球生态系统中发挥的作用，让孩子明白万物相连的科学道理。", lesson: "大自然中各种资源相互依存，我们必须遵循自然规律和谐相处。" }
   ];
 
+  function safeGetStoredState() {
+    try {
+      if (typeof GM_getValue !== "undefined") {
+        return GM_getValue(STORE_KEY, {}) || {};
+      }
+    } catch (e) {
+      console.warn("GM_getValue error:", e);
+    }
+    try {
+      if (typeof localStorage !== "undefined") {
+        const val = localStorage.getItem(STORE_KEY);
+        return val ? JSON.parse(val) : {};
+      }
+    } catch (e) {}
+    return {};
+  }
+
+  function safeSetStoredState(val) {
+    try {
+      if (typeof GM_setValue !== "undefined") {
+        GM_setValue(STORE_KEY, val);
+        return;
+      }
+    } catch (e) {
+      console.warn("GM_setValue error:", e);
+    }
+    try {
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(STORE_KEY, JSON.stringify(val));
+      }
+    } catch (e) {}
+  }
+
   const state = {
     activeTab: "api", // 'api' | 'dom'
     books: FALLBACK_BOOKS,
@@ -64,15 +97,17 @@
     collapsed: false,
     studentName: "",
     studentGrade: "",
-    ...GM_getValue(STORE_KEY, {})
+    ...safeGetStoredState()
   };
 
   if (!state.books || state.books.length === 0) {
     state.books = FALLBACK_BOOKS;
   }
+  if (!Array.isArray(state.submittedTitles)) state.submittedTitles = [];
+  if (!Array.isArray(state.submittedIsbns)) state.submittedIsbns = [];
 
   function saveState() {
-    GM_setValue(STORE_KEY, {
+    safeSetStoredState({
       selectedKey: state.selectedKey,
       selectedDate: state.selectedDate,
       filters: state.filters,
@@ -465,11 +500,18 @@
     try {
       el.focus();
       const valStr = String(value ?? "");
-      const proto = Object.getPrototypeOf(el);
 
+      // Handle Ionic shadow elements (like ion-input, ion-textarea)
+      let targetInput = el;
+      if (el.shadowRoot) {
+        const innerInput = el.shadowRoot.querySelector("input, textarea");
+        if (innerInput) targetInput = innerInput;
+      }
+
+      const proto = Object.getPrototypeOf(targetInput);
       let setter = null;
       try {
-        setter = Object.getOwnPropertyDescriptor(el.constructor.prototype, "value")?.set;
+        setter = Object.getOwnPropertyDescriptor(targetInput.constructor.prototype, "value")?.set;
       } catch (e) {}
       if (!setter && proto) {
         try { setter = Object.getOwnPropertyDescriptor(proto, "value")?.set; } catch (e) {}
@@ -482,15 +524,23 @@
       }
 
       if (setter) {
-        try { setter.call(el, valStr); } catch (e) { el.value = valStr; }
+        try { setter.call(targetInput, valStr); } catch (e) { targetInput.value = valStr; }
       } else {
-        el.value = valStr;
+        targetInput.value = valStr;
       }
 
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: valStr }));
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      el.dispatchEvent(new Event("blur", { bubbles: true }));
+      targetInput.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: valStr }));
+      targetInput.dispatchEvent(new Event("input", { bubbles: true }));
+      targetInput.dispatchEvent(new Event("change", { bubbles: true }));
+      targetInput.dispatchEvent(new Event("blur", { bubbles: true }));
+
+      // Propagate values up for Ionic component wrapper if applicable
+      if (el !== targetInput) {
+        el.value = valStr;
+        el.dispatchEvent(new CustomEvent("ionInput", { bubbles: true, detail: { value: valStr } }));
+        el.dispatchEvent(new CustomEvent("ionChange", { bubbles: true, detail: { value: valStr } }));
+      }
+
       el.blur();
       return true;
     } catch (err) {
@@ -857,7 +907,7 @@
     });
 
     panel.addEventListener("click", async (e) => {
-      if (e.target.id === "nih-tab-api") {
+      if (e.target.closest("#nih-tab-api")) {
         state.activeTab = "api";
         document.querySelector("#nih-tab-api").classList.add("active");
         document.querySelector("#nih-tab-dom").classList.remove("active");
@@ -865,7 +915,7 @@
         document.querySelector("#nih-content-dom").style.display = "none";
         saveState();
       }
-      if (e.target.id === "nih-tab-dom") {
+      if (e.target.closest("#nih-tab-dom")) {
         state.activeTab = "dom";
         document.querySelector("#nih-tab-dom").classList.add("active");
         document.querySelector("#nih-tab-api").classList.remove("active");
@@ -873,10 +923,10 @@
         document.querySelector("#nih-content-api").style.display = "none";
         saveState();
       }
-      if (e.target.id === "nih-btn-submit-api") await submitApi();
-      if (e.target.id === "nih-btn-fill-dom") fillDomMode();
-      if (e.target.id === "nih-btn-diag") diagnosePage();
-      if (e.target.id === "nih-toggle") {
+      if (e.target.closest("#nih-btn-submit-api")) await submitApi();
+      if (e.target.closest("#nih-btn-fill-dom")) fillDomMode();
+      if (e.target.closest("#nih-btn-diag")) diagnosePage();
+      if (e.target.closest("#nih-toggle")) {
         state.collapsed = !state.collapsed;
         document.querySelector("#nih-body-content").style.display = state.collapsed ? "none" : "block";
         saveState();
