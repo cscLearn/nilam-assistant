@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.5
+// @version      1.0.6
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.5";
+  const SCRIPT_VERSION = "1.0.6";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -562,51 +562,117 @@
 
     try {
       const langName = nilamLanguageName(rawBook.language);
+      let filledCount = 0;
 
-      // Check Page 1: #title element exists
-      const titleEl = document.getElementById("title");
-      if (titleEl) {
-        setValueSafely(document.getElementById("title"), rawBook.title);
-        setValueSafely(document.getElementById("noOfPage"), rawBook.pages);
-        setValueSafely(document.getElementById("isbn"), rawBook.isbn);
-        setValueSafely(document.getElementById("author"), rawBook.author);
-        setValueSafely(document.getElementById("publisher"), rawBook.publisher);
-        setValueSafely(document.getElementById("publishedYear"), rawBook.year);
+      // ── Page 2 detection: textareas present (Rumusan / Pengajaran) ──
+      const textareas = Array.from(document.querySelectorAll("textarea")).filter(el => !isInsidePanel(el));
+      if (textareas.length >= 1) {
+        // Fill #summary / #review by ID first, fallback to DOM order
+        const summaryEl = document.getElementById("summary") || textareas[0];
+        const reviewEl  = document.getElementById("review")  || textareas[1] || null;
+        setValueSafely(summaryEl, rawBook.rumusan);
+        if (reviewEl) setValueSafely(reviewEl, rawBook.lesson);
+        setTimeout(() => forceClickFifthStar(), 300);
+        setStatus(`📝 第二页已填入 Rumusan 与 Pengajaran，5星已选！请点击【Hantar】。`);
+        return;
+      }
 
-        document.getElementById("typephysical")?.click();
-        selectDropdownByText(0, rawBook.category);
-        selectDropdownByText(1, langName);
+      // ── Page 1 detection: scan all visible inputs ──
+      const allInputs = Array.from(document.querySelectorAll("input, select")).filter(el => !isInsidePanel(el));
 
+      // Try getElementById first (some AINS versions), then fall back to name/label scan
+      const getById = (id) => document.getElementById(id);
+
+      function tryFillInput(keywords, value) {
+        // 1. Try exact id match
+        for (const kw of keywords) {
+          const el = getById(kw);
+          if (el && !isInsidePanel(el)) { setValueSafely(el, value); filledCount++; return; }
+        }
+        // 2. Scan all inputs by id/name/placeholder
+        for (const el of allInputs) {
+          if (el.tagName === "SELECT") continue;
+          const sig = `${el.id} ${el.name} ${el.placeholder} ${el.getAttribute("aria-label") || ""}`.toLowerCase();
+          if (keywords.some(kw => sig.includes(kw))) {
+            setValueSafely(el, value); filledCount++; return;
+          }
+        }
+        // 3. Check parent label text
+        for (const el of allInputs) {
+          if (el.tagName === "SELECT") continue;
+          const label = el.closest("ion-item, .form-group, div")
+            ?.querySelector("ion-label, label, .label, span");
+          const labelText = (label?.textContent || "").toLowerCase();
+          if (keywords.some(kw => labelText.includes(kw))) {
+            setValueSafely(el, value); filledCount++; return;
+          }
+        }
+      }
+
+      tryFillInput(["title", "tajuk", "judul"], rawBook.title);
+      tryFillInput(["noofpage", "bilangan", "mukasurat", "muka surat", "page"], String(rawBook.pages));
+      tryFillInput(["isbn"], rawBook.isbn);
+      tryFillInput(["author", "penulis"], rawBook.author);
+      tryFillInput(["publisher", "penerbit"], rawBook.publisher);
+      tryFillInput(["publishedyear", "tahun", "year"], String(rawBook.year));
+
+      // ── Dropdowns: Category & Language ──
+      const langKeywords = {
+        bm: ["bahasa melayu", "melayu", "malaysia", "bm"],
+        en: ["bahasa inggeris", "inggeris", "english", "bi"],
+        zh: ["bahasa cina", "cina", "chinese", "bc", "mandarin"]
+      };
+      const targetLangKws = langKeywords[rawBook.language] || langKeywords.bm;
+      const targetCatKw   = rawBook.category === "Fiksyen" ? "fiksyen" : "bukan fiksyen";
+
+      Array.from(document.querySelectorAll("select")).filter(el => !isInsidePanel(el)).forEach(sel => {
+        const opts = Array.from(sel.options);
+        // try language match
+        const langOpt = opts.find(o => targetLangKws.some(kw => o.textContent.toLowerCase().includes(kw)));
+        // try category match
+        const catOpt  = opts.find(o => o.textContent.toLowerCase().includes(targetCatKw));
+        const matched = langOpt || catOpt;
+        if (matched) {
+          sel.value = matched.value;
+          sel.selectedIndex = matched.index;
+          sel.dispatchEvent(new Event("input",  { bubbles: true }));
+          sel.dispatchEvent(new Event("change", { bubbles: true }));
+          filledCount++;
+        }
+      });
+
+      // ── Ionic ion-select (Kategori / Bahasa) ──
+      document.querySelectorAll("ion-select").forEach(ionSel => {
+        if (isInsidePanel(ionSel)) return;
+        const label = (ionSel.closest("ion-item")?.querySelector("ion-label")?.textContent || "").toLowerCase();
+        if (label.includes("kategori") || label.includes("category")) {
+          ionSel.value = rawBook.category;
+          ionSel.dispatchEvent(new CustomEvent("ionChange", { bubbles: true, detail: { value: rawBook.category } }));
+          filledCount++;
+        } else if (label.includes("bahasa") || label.includes("language")) {
+          ionSel.value = langName;
+          ionSel.dispatchEvent(new CustomEvent("ionChange", { bubbles: true, detail: { value: langName } }));
+          filledCount++;
+        }
+      });
+
+      // ── Physical book radio / toggle ──
+      document.getElementById("typephysical")?.click();
+
+      if (filledCount > 0) {
         // Mark book as used & advance pointer
         state.submittedTitles.push(rawBook.title);
         state.submittedIsbns.push(rawBook.isbn);
-        saveState();
-        applyFilters();
-        renderBookSelect();
-
-        setStatus(`📝 第一页《${rawBook.title}》已自动填入！已选 [${rawBook.category}] 与 [${langName}]，已自动切换至下一本未读图书。请点击【Seterusnya】。`);
-        return;
+        saveState(); applyFilters(); renderBookSelect();
+        setStatus(`📝 已填入《${rawBook.title}》[${rawBook.category}][${langName}]，请点击【Seterusnya】继续！`);
+      } else {
+        setStatus("⚠️ 未找到表单字段，请确认已在 AINS 填书页面！", true);
       }
-
-      // Check Page 2: #summary element exists
-      const summaryEl = document.getElementById("summary");
-      if (summaryEl) {
-        setValueSafely(document.getElementById("summary"), rawBook.rumusan);
-        setValueSafely(document.getElementById("review"), rawBook.lesson);
-
-        setTimeout(() => {
-          forceClickFifthStar();
-        }, 300);
-
-        setStatus(`📝 第二页已自动填入 Rumusan 与 Pengajaran，并选中 5 星好评！请点击【Hantar】。`);
-        return;
-      }
-
-      setStatus("⚠️ 请在 AINS 页面点击【Seterusnya】或【Tambah Buku】以开始填表。", true);
     } catch (e) {
       setStatus(`DOM 填表失败: ${e.message}`, true);
     }
   }
+
 
   function createPanel() {
     if (document.getElementById(PANEL_ID)) return;
