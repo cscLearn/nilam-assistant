@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.1
+// @version      1.0.2
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.1";
+  const SCRIPT_VERSION = "1.0.2";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -490,15 +490,40 @@
         }
       });
 
-      // Try selecting dropdowns if available
-      const selects = Array.from(document.querySelectorAll("select")).filter(el => !isInsidePanel(el));
+      // Auto-fill Select Dropdowns (Category & Bahasa/Language)
+      const langKeywords = {
+        bm: ["bahasa melayu", "melayu", "bahasa malaysia", "bm"],
+        en: ["bahasa inggeris", "inggeris", "english", "bi"],
+        zh: ["bahasa cina", "cina", "chinese", "bc"]
+      };
+      const targetLangs = langKeywords[book.language] || langKeywords.bm;
+      const targetCat = book.category === "Fiksyen" ? "fiksyen" : "bukan fiksyen";
+
+      const selects = Array.from(document.querySelectorAll("select, ion-select")).filter(el => !isInsidePanel(el));
       selects.forEach(selectEl => {
-        const targetText = book.category === "Fiksyen" ? "Fiksyen" : "Bukan Fiksyen";
-        const opt = Array.from(selectEl.options).find(o => o.textContent.includes(targetText));
-        if (opt) {
-          selectEl.value = opt.value;
-          selectEl.dispatchEvent(new Event("change", { bubbles: true }));
-          filledCount++;
+        if (selectEl.options) {
+          const outerText = (selectEl.outerHTML || "").toLowerCase();
+          const idName = `${selectEl.id} ${selectEl.name} ${selectEl.getAttribute("aria-label") || ""}`.toLowerCase();
+
+          let matchedOpt = null;
+          if (idName.includes("bahasa") || idName.includes("language") || outerText.includes("bahasa")) {
+            matchedOpt = Array.from(selectEl.options).find(o => targetLangs.some(l => (o.textContent || "").toLowerCase().includes(l)));
+          } else if (idName.includes("kategori") || idName.includes("category") || outerText.includes("kategori")) {
+            matchedOpt = Array.from(selectEl.options).find(o => (o.textContent || "").toLowerCase().includes(targetCat));
+          } else {
+            matchedOpt = Array.from(selectEl.options).find(o => {
+              const txt = (o.textContent || "").toLowerCase();
+              return targetLangs.some(l => txt.includes(l)) || txt.includes(targetCat);
+            });
+          }
+
+          if (matchedOpt) {
+            selectEl.value = matchedOpt.value;
+            selectEl.selectedIndex = matchedOpt.index;
+            selectEl.dispatchEvent(new Event("input", { bubbles: true }));
+            selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+            filledCount++;
+          }
         }
       });
 
