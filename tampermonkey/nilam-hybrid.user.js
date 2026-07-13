@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NILAM Hybrid Assistant (二合一双模版)
 // @namespace    https://github.com/cscLearn/nilam-assistant
-// @version      1.0.4
+// @version      1.0.5
 // @description  双模式 NILAM 刷书助手：默认 ⚡ API 自动提交（整合 18,000 本书库 + 种子打乱防撞），备用 📝 辅助 DOM 填表模式。
 // @author       cscLearn
 // @updateURL    https://raw.githubusercontent.com/cscLearn/nilam-assistant/main/tampermonkey/nilam-hybrid.user.js
@@ -22,7 +22,7 @@
 
   const PANEL_ID = "nilam-hybrid-assistant";
   const STORE_KEY = "nilam_hybrid_assistant_state_v1";
-  const SCRIPT_VERSION = "1.0.4";
+  const SCRIPT_VERSION = "1.0.5";
   const BOOKS_DATA_URL = "https://raw.githubusercontent.com/cscLearn/nilam-book-database/main/data/merged/books-all.json";
 
   // 60 Offline Fallback Books (20 BM, 20 EN, 20 ZH)
@@ -270,6 +270,61 @@
     };
   }
 
+  function extractTitlesAndIsbns(obj, titleSet, isbnSet) {
+    if (!obj || typeof obj !== "object") return;
+    if (Array.isArray(obj)) {
+      for (const item of obj) extractTitlesAndIsbns(item, titleSet, isbnSet);
+    } else {
+      for (const key in obj) {
+        const lower = key.toLowerCase();
+        if (lower === "title" && typeof obj[key] === "string") {
+          const t = obj[key].trim();
+          if (t) {
+            titleSet.add(t);
+            titleSet.add(normalizeTitle(t));
+          }
+        } else if (lower === "isbn" && typeof obj[key] === "string") {
+          const clean = cleanIsbn(obj[key]);
+          if (clean) isbnSet.add(clean);
+        } else if (typeof obj[key] === "object") {
+          extractTitlesAndIsbns(obj[key], titleSet, isbnSet);
+        }
+      }
+    }
+  }
+
+  function fetchAinsHistory() {
+    if (!state.userId || !state.authHeader) return;
+    const url = `https://ains-api.moe.gov.my/api/nilam-records?filters[user][id]=${state.userId}&pagination[limit]=1000`;
+
+    GM_xmlhttpRequest({
+      method: "GET",
+      url: url,
+      headers: {
+        authorization: state.authHeader,
+        accept: "application/json"
+      },
+      onload: (response) => {
+        try {
+          const data = JSON.parse(response.responseText);
+          const titleSet = new Set(state.submittedTitles || []);
+          const isbnSet = new Set(state.submittedIsbns || []);
+
+          extractTitlesAndIsbns(data, titleSet, isbnSet);
+
+          state.submittedTitles = Array.from(titleSet);
+          state.submittedIsbns = Array.from(isbnSet);
+          saveState();
+          applyFilters();
+          renderBookSelect();
+          setStatus(`已精准同步 AINS 历史记录（自动拦截过滤 ${state.submittedTitles.length} 本已读图书）`);
+        } catch (e) {
+          console.warn("History sync error:", e);
+        }
+      }
+    });
+  }
+
   function inspectRequest(url, headers, body) {
     if (!url) return;
     const auth = extractAuthHeader(headers);
@@ -282,6 +337,7 @@
       }
       saveState();
       renderApiStatus();
+      fetchAinsHistory();
     }
 
     if (url.includes("/api/nilam-records") || url.includes("/api/nilam-records/submit")) {
@@ -521,7 +577,14 @@
         selectDropdownByText(0, rawBook.category);
         selectDropdownByText(1, langName);
 
-        setStatus(`📝 第一页《${rawBook.title}》已自动填入！已选 [${rawBook.category}] 与 [${langName}]。请点击【Seterusnya】。`);
+        // Mark book as used & advance pointer
+        state.submittedTitles.push(rawBook.title);
+        state.submittedIsbns.push(rawBook.isbn);
+        saveState();
+        applyFilters();
+        renderBookSelect();
+
+        setStatus(`📝 第一页《${rawBook.title}》已自动填入！已选 [${rawBook.category}] 与 [${langName}]，已自动切换至下一本未读图书。请点击【Seterusnya】。`);
         return;
       }
 
@@ -545,46 +608,6 @@
     }
   }
 
-  // === Draggable Drag Handler ===
-  function makeDraggable(panel, handle) {
-    let isDragging = false;
-    let startX, startY, startLeft, startTop;
-
-    handle.addEventListener("mousedown", (e) => {
-      if (e.target.tagName === "BUTTON") return;
-      isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      const rect = panel.getBoundingClientRect();
-      startLeft = rect.left;
-      startTop = rect.top;
-
-      panel.style.right = "auto";
-      panel.style.bottom = "auto";
-      panel.style.left = `${startLeft}px`;
-      panel.style.top = `${startTop}px`;
-
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-      e.preventDefault();
-    });
-
-    function onMouseMove(e) {
-      if (!isDragging) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      panel.style.left = `${Math.max(0, startLeft + dx)}px`;
-      panel.style.top = `${Math.max(0, startTop + dy)}px`;
-    }
-
-    function onMouseUp() {
-      isDragging = false;
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-    }
-  }
-
-  // === Compact Panel UI with Tabs ===
   function createPanel() {
     if (document.getElementById(PANEL_ID)) return;
     const panel = document.createElement("div");
@@ -782,7 +805,10 @@
       if (!document.getElementById(PANEL_ID) && document.body) {
         createPanel();
       }
-    }, 1000);
+      if (state.authHeader && state.userId) {
+        fetchAinsHistory();
+      }
+    }, 10000);
   }
 
   main();
